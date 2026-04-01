@@ -470,14 +470,18 @@ async def tavily_map(
 
 @mcp.tool(name="credit-status")
 async def credit_status() -> dict:
-    """Show remaining Tavily API credits across all configured keys."""
+    """Show remaining Tavily API credits across all configured keys, including per-key and total utilization percentage."""
     keys = router.get_status()
     total_remaining = sum(k["remaining"] for k in keys)
     total_limit = sum(k["limit"] for k in keys)
+    total_used = sum(k["used"] for k in keys)
+    total_utilization = round(total_used / total_limit * 100, 1) if total_limit > 0 else 0
     return {
         "keys": keys,
+        "total_used": total_used,
         "total_remaining": total_remaining,
         "total_limit": total_limit,
+        "total_utilization_pct": total_utilization,
     }
 
 

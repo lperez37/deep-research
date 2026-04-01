@@ -230,7 +230,7 @@ class TestGetStatus:
         assert len(statuses) == 3
 
         first = statuses[0]
-        assert set(first.keys()) == {"key", "used", "limit", "remaining"}
+        assert set(first.keys()) == {"key", "used", "limit", "remaining", "utilization_pct"}
 
     def test_status_values(self) -> None:
         router, tracker = _make_router(credits_per_key=1000)
@@ -243,6 +243,7 @@ class TestGetStatus:
         assert first["used"] == 250
         assert first["limit"] == 1000
         assert first["remaining"] == 750
+        assert first["utilization_pct"] == 25.0
 
     def test_status_key_is_masked(self) -> None:
         router, _ = _make_router()
@@ -274,6 +275,7 @@ class TestGetStatus:
         for status in statuses:
             assert status["used"] == 0
             assert status["remaining"] == 500
+            assert status["utilization_pct"] == 0
 
 
 # ---------------------------------------------------------------------------

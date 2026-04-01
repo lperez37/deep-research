@@ -57,12 +57,16 @@ class KeyRouter:
 
     def get_status(self) -> list[dict]:
         """Return credit status for every key (for the status tool)."""
-        return [
-            {
+        result = []
+        for k in self._keys:
+            used = self._tracker.get_usage(k)
+            remaining = max(0, self._credits_per_key - used)
+            utilization = round(used / self._credits_per_key * 100, 1) if self._credits_per_key > 0 else 0
+            result.append({
                 "key": f"{k[:8]}...{k[-4:]}",
-                "used": self._tracker.get_usage(k),
+                "used": used,
                 "limit": self._credits_per_key,
-                "remaining": max(0, self._credits_per_key - self._tracker.get_usage(k)),
-            }
-            for k in self._keys
-        ]
+                "remaining": remaining,
+                "utilization_pct": utilization,
+            })
+        return result

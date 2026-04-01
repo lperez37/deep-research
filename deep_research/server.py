@@ -22,7 +22,7 @@ settings = Settings()
 
 tracker = CreditTracker(db_path=settings.db_path)
 router = KeyRouter(
-    keys=settings.tavily_api_keys,
+    keys=settings.api_keys,
     credits_per_key=settings.credits_per_key,
     tracker=tracker,
 )

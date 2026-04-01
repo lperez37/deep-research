@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import field_validator
+from pydantic import computed_field
 from pydantic_settings import BaseSettings
 
 
@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     """All settings are read from environment variables."""
 
     # Comma-separated Tavily API keys (at least 1 required)
-    tavily_api_keys: list[str]
+    tavily_api_keys: str  # raw comma-separated string from env
 
     # Monthly credit budget per key (free tier = 1000)
     credits_per_key: int = 1000
@@ -39,9 +39,8 @@ class Settings(BaseSettings):
         "env_nested_delimiter": "__",
     }
 
-    @field_validator("tavily_api_keys", mode="before")
-    @classmethod
-    def split_keys(cls, v: str | list[str]) -> list[str]:
-        if isinstance(v, str):
-            return [k.strip() for k in v.split(",") if k.strip()]
-        return v
+    @computed_field
+    @property
+    def api_keys(self) -> list[str]:
+        """Parse comma-separated keys into a list."""
+        return [k.strip() for k in self.tavily_api_keys.split(",") if k.strip()]

@@ -81,20 +81,6 @@ async def test_map_success(client: TavilyClient):
     assert len(result["urls"]) == 2
 
 
-@respx.mock
-async def test_research_success(client: TavilyClient):
-    """POST /research returns parsed JSON on 200."""
-    payload = {"report": "deep research report", "sources": []}
-    respx.post(f"{BASE_URL}/research").mock(
-        return_value=httpx.Response(200, json=payload),
-    )
-
-    result = await client.request("research", API_KEY, {"query": "deep topic"})
-
-    assert result == payload
-    assert result["report"] == "deep research report"
-
-
 # -------------------------------------------------------------------
 # 6: 401 raises TavilyAPIError with status 401
 # -------------------------------------------------------------------

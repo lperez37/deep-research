@@ -17,7 +17,7 @@ class TavilyAPIError(Exception):
 class TavilyClient:
     """Async client for Tavily REST endpoints."""
 
-    ENDPOINTS = frozenset({"search", "extract", "crawl", "map", "research"})
+    ENDPOINTS = frozenset({"search", "extract", "crawl", "map"})
 
     def __init__(self, base_url: str = "https://api.tavily.com") -> None:
         self._http = httpx.AsyncClient(

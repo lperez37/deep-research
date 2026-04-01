@@ -106,13 +106,5 @@ def estimate_credits(endpoint: str, params: dict) -> int:
             pages = params.get("limit", 50)
             return max(1, math.ceil(pages / 5) * multiplier)
 
-        case "research":
-            model = params.get("model", "auto")
-            if model == "pro":
-                return 60
-            if model == "mini":
-                return 30
-            return 45  # "auto" — use midpoint
-
         case _:
             return 1

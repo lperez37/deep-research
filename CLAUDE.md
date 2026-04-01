@@ -12,7 +12,7 @@ keys to multiply free-tier credit allowances (1,000 credits/key/month).
 - `deep_research/credits.py` — SQLite credit tracker (WAL mode) + cost estimation
 - `deep_research/router.py` — Round-robin key selection with credit-aware skipping
 - `deep_research/tavily_client.py` — Async httpx wrapper for Tavily REST API
-- `deep_research/server.py` — FastMCP server with 6 tools (5 Tavily + credit-status)
+- `deep_research/server.py` — FastMCP server with 5 tools (4 Tavily + credit-status)
 
 ## Quick Commands
 
@@ -20,7 +20,7 @@ keys to multiply free-tier credit allowances (1,000 credits/key/month).
 # Install
 pip install -e ".[dev]"
 
-# Run tests (67 tests, all should pass)
+# Run tests (63 tests, all should pass)
 pytest
 
 # Run server (stdio mode)

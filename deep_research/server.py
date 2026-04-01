@@ -84,7 +84,7 @@ async def _route_request(endpoint: str, params: dict) -> dict:
     raise RuntimeError("All retry attempts exhausted")
 
 
-# ── tools (exact Tavily MCP interface) ─────────────────────────
+# ── tools (Tavily MCP interface, minus research) ───────────────
 
 
 @mcp.tool(name="tavily-search")
@@ -170,19 +170,6 @@ async def tavily_map(
     return await _route_request("map", params)
 
 
-@mcp.tool(name="tavily-research")
-async def tavily_research(
-    input: str,
-    model: str = "auto",
-) -> dict:
-    """Perform comprehensive research on a given topic or question.
-
-    Returns a detailed response based on multi-source research findings.
-    """
-    params = _strip_none(locals())
-    return await _route_request("research", params)
-
-
 # ── bonus: credit-status tool ──────────────────────────────────
 
 
@@ -217,7 +204,7 @@ def main() -> None:
         stream=sys.stderr,
     )
     logger.info(
-        "Starting deep-research with %d keys (%s transport)",
+        "Starting deep-research with %d keys, 5 tools (%s transport)",
         router.key_count,
         settings.transport,
     )

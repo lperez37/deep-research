@@ -5,11 +5,11 @@
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![MCP](https://img.shields.io/badge/protocol-MCP-purple)
 
-Drop-in replacement for the official [Tavily MCP server](https://github.com/tavily-ai/tavily-mcp) that routes requests across multiple API keys to multiply your free-tier credits.
+Drop-in replacement for the official [Tavily MCP server](https://github.com/tavily-ai/tavily-mcp) that routes requests across multiple API keys to multiply your free-tier credits. Exposes search, extract, crawl, and map tools (research is excluded to conserve credits).
 
 ## What It Does
 
-deep-research is a FastMCP server that exposes the same tools as the official Tavily MCP (`tavily-search`, `tavily-extract`, `tavily-crawl`, `tavily-map`, `tavily-research`) with identical parameter schemas and response formats. Behind the scenes, it distributes requests across N preconfigured Tavily API keys using round-robin rotation with credit-aware skipping, so clients never need to know that multiple keys exist. With five free-tier accounts (1,000 credits each), you get 5,000 credits per month instead of 1,000 -- swap one MCP config line and everything else stays the same.
+deep-research is a FastMCP server that exposes the core Tavily MCP tools (`tavily-search`, `tavily-extract`, `tavily-crawl`, `tavily-map`) with identical parameter schemas and response formats. The `tavily-research` endpoint is intentionally excluded because a single call can consume 15-250 credits. Behind the scenes, requests are distributed across N preconfigured Tavily API keys using round-robin rotation with credit-aware skipping, so clients never need to know that multiple keys exist. With two free-tier accounts (1,000 credits each), you get 2,000 credits per month instead of 1,000 -- swap one MCP config line and everything else stays the same.
 
 ## Architecture
 
@@ -27,9 +27,8 @@ deep-research is a FastMCP server that exposes the same tools as the official Ta
 |    tavily-search    --+                              |
 |    tavily-extract     |   +--------------------+    |
 |    tavily-crawl       +-->|   Key Router       |    |
-|    tavily-map         |   |                    |    |
-|    tavily-research  --+   |  Strategy:         |    |
-|    credit-status          |  - Round-robin     |    |
+|    tavily-map       --+   |                    |    |
+|    credit-status          |  Strategy:         |    |
 |                           |  - Credit-aware    |    |
 |                           |  - Monthly reset   |    |
 |                           +--------+-----------+    |
@@ -222,7 +221,7 @@ All settings are read from environment variables. A `.env` file is supported via
 
 ## Tools
 
-deep-research exposes six MCP tools. The first five mirror the official Tavily MCP server exactly.
+deep-research exposes five MCP tools. The first four mirror the official Tavily MCP server exactly. The `tavily-research` endpoint is excluded because it costs 15-250 credits per call.
 
 | Tool | Description | Credit Cost |
 |---|---|---|
@@ -230,7 +229,6 @@ deep-research exposes six MCP tools. The first five mirror the official Tavily M
 | `tavily-extract` | Extract content from one or more URLs | 1 per 5 URLs (basic) / 2 per 5 URLs (advanced) |
 | `tavily-crawl` | Crawl a website starting from a URL with configurable depth | 1 per 5 pages (basic) / 2 per 5 pages (advanced) |
 | `tavily-map` | Map a website's URL structure | 1 per 10 pages / 2 per 10 pages (with instructions) |
-| `tavily-research` | Comprehensive multi-source research on a topic | 30 (mini) / 45 (auto) / 60 (pro) |
 | `credit-status` | Show remaining credits across all configured keys | 0 (local only) |
 
 ## Credit System

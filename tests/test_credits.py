@@ -151,25 +151,6 @@ class TestEstimateCredits:
                 20,
                 id="crawl-advanced-limit-50",
             ),
-            # ── research ──
-            pytest.param(
-                "research",
-                {"model": "pro"},
-                60,
-                id="research-pro",
-            ),
-            pytest.param(
-                "research",
-                {"model": "mini"},
-                30,
-                id="research-mini",
-            ),
-            pytest.param(
-                "research",
-                {"model": "auto"},
-                45,
-                id="research-auto",
-            ),
             # ── unknown endpoint ──
             pytest.param(
                 "totally-unknown",

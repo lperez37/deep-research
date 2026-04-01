@@ -103,16 +103,67 @@ echo 'TAVILY_API_KEYS=tvly-key1,tvly-key2' > .env
 docker compose up -d
 ```
 
-The MCP endpoint is available at `http://your-host:8087/mcp/`.
+The MCP endpoint is available at `http://your-host:8087/mcp`.
 
 ## Claude Code Integration
 
+### 1. Remove the official Tavily MCP (if present)
+
 ```bash
-claude mcp add deep-research --url http://your-host:8087/mcp/
+# Check if you have it
+claude mcp list
+
+# Remove it (adjust scope if needed)
+claude mcp remove tavily -s user
 ```
 
-That's it. See [SETUP.md](SETUP.md) for VPS deployment instructions and
-optional bearer token authentication.
+### 2. Add deep-research as a remote MCP server
+
+```bash
+claude mcp add tavily -s user -t http http://your-host:8087/mcp
+```
+
+Naming it `tavily` means your existing `mcp__tavily__*` permission rules
+keep working and tools appear under the same namespace.
+
+### 3. Auto-approve tools (optional)
+
+Add to the `allow` list in `~/.claude/settings.json`:
+
+```json
+"mcp__tavily__tavily-search",
+"mcp__tavily__tavily-extract",
+"mcp__tavily__tavily-crawl",
+"mcp__tavily__tavily-map",
+"mcp__tavily__credit-status"
+```
+
+### 4. Verify
+
+```bash
+claude mcp list
+```
+
+You should see `tavily: http://your-host:8087/mcp (HTTP) - Connected`.
+
+### Alternative: `.mcp.json` file
+
+Instead of `claude mcp add`, you can create a `.mcp.json` in your project
+root or home directory:
+
+```json
+{
+  "mcpServers": {
+    "tavily": {
+      "type": "http",
+      "url": "http://your-host:8087/mcp"
+    }
+  }
+}
+```
+
+See [SETUP.md](SETUP.md) for full VPS deployment instructions and optional
+bearer token authentication.
 
 ## Configuration Reference
 

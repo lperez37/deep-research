@@ -29,9 +29,8 @@ TAVILY_API_KEYS=key1,key2 python -m deep_research
 # Run server (HTTP mode)
 TAVILY_API_KEYS=key1,key2 TRANSPORT=http python -m deep_research
 
-# Docker
-docker compose up deep-research            # stdio
-docker compose --profile http up deep-research-http  # HTTP on :8000
+# Docker (HTTP on :8087)
+docker compose up -d
 ```
 
 ## Tech Stack

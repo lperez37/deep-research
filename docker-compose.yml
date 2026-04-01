@@ -1,33 +1,15 @@
 services:
-  # stdio transport — for Claude Desktop / local MCP clients
   deep-research:
-    build: .
-    stdin_open: true
-    tty: true
-    env_file: .env
-    volumes:
-      - credit-data:/data
-    restart: unless-stopped
-
-  # HTTP transport — for remote / networked MCP access
-  deep-research-http:
     build: .
     env_file: .env
     environment:
       TRANSPORT: http
+      PORT: "8087"
     ports:
-      - "8000:8000"
+      - "8087:8087"
     volumes:
       - credit-data:/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    profiles:
-      - http
 
 volumes:
   credit-data:

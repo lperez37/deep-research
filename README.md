@@ -95,113 +95,24 @@ The server will listen on `http://0.0.0.0:8000`.
 
 ## Docker
 
-### Build and run with Docker Compose
+```bash
+# Create .env with your keys
+echo 'TAVILY_API_KEYS=tvly-key1,tvly-key2' > .env
+
+# Start the server
+docker compose up -d
+```
+
+The MCP endpoint is available at `http://your-host:8087/mcp/`.
+
+## Claude Code Integration
 
 ```bash
-# stdio mode (default)
-docker compose up -d deep-research
-
-# HTTP mode
-docker compose --profile http up -d deep-research-http
+claude mcp add deep-research --url http://your-host:8087/mcp/
 ```
 
-### stdio mode for Claude Desktop
-
-The default `deep-research` service runs with `stdin_open: true` and `tty: true`, making it compatible with MCP clients that communicate over stdio:
-
-```bash
-docker compose run --rm -i deep-research
-```
-
-### HTTP mode for remote access
-
-The `deep-research-http` service exposes port 8000 and includes a health check:
-
-```bash
-docker compose --profile http up -d deep-research-http
-```
-
-The MCP endpoint is available at `http://localhost:8000/mcp/`.
-
-## Claude Desktop Integration
-
-### Direct Python (stdio)
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or the equivalent path on your OS:
-
-```json
-{
-  "mcpServers": {
-    "tavily": {
-      "command": "python",
-      "args": ["-m", "deep_research"],
-      "env": {
-        "TAVILY_API_KEYS": "tvly-key1,tvly-key2,tvly-key3,tvly-key4,tvly-key5"
-      }
-    }
-  }
-}
-```
-
-### Docker (stdio)
-
-```json
-{
-  "mcpServers": {
-    "tavily": {
-      "command": "docker",
-      "args": [
-        "compose", "-f", "/absolute/path/to/tavily-router/docker-compose.yml",
-        "run", "--rm", "-i", "deep-research"
-      ]
-    }
-  }
-}
-```
-
-### Docker HTTP
-
-Start the HTTP service first, then point Claude Desktop at the URL:
-
-```json
-{
-  "mcpServers": {
-    "tavily": {
-      "url": "http://localhost:8000/mcp/"
-    }
-  }
-}
-```
-
-### Claude Code
-
-Add to `~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "tavily": {
-      "command": "python",
-      "args": ["-m", "deep_research"],
-      "env": {
-        "TAVILY_API_KEYS": "tvly-key1,tvly-key2,tvly-key3,tvly-key4,tvly-key5"
-      }
-    }
-  }
-}
-```
-
-Or, if using the HTTP transport:
-
-```json
-{
-  "mcpServers": {
-    "tavily": {
-      "url": "http://localhost:8000/mcp/"
-    }
-  }
-}
-```
+That's it. See [SETUP.md](SETUP.md) for VPS deployment instructions and
+optional bearer token authentication.
 
 ## Configuration Reference
 

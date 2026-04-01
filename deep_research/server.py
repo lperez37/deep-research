@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Optional
+from typing import Annotated, Literal, Optional
 
 import httpx
 from fastmcp import FastMCP
+from pydantic import Field
 
 from deep_research.config import Settings
 from deep_research.credits import CreditTracker, estimate_credits
@@ -89,83 +90,377 @@ async def _route_request(endpoint: str, params: dict) -> dict:
 
 @mcp.tool(name="tavily-search")
 async def tavily_search(
-    query: str,
-    search_depth: str = "basic",
-    topic: str = "general",
-    days: int = 3,
-    time_range: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    max_results: int = 10,
-    include_images: bool = False,
-    include_image_descriptions: bool = False,
-    include_raw_content: bool = False,
-    include_domains: Optional[list[str]] = None,
-    exclude_domains: Optional[list[str]] = None,
-    country: Optional[str] = None,
-    include_favicon: bool = False,
+    query: Annotated[str, Field(description="Search query")],
+    search_depth: Annotated[
+        Literal["basic", "advanced", "fast", "ultra-fast"],
+        Field(
+            default="basic",
+            description=(
+                "The depth of the search. 'basic' for generic results, "
+                "'advanced' for more thorough search, 'fast' for optimized "
+                "low latency with high relevance, 'ultra-fast' for "
+                "prioritizing latency above all else"
+            ),
+        ),
+    ] = "basic",
+    topic: Annotated[
+        Literal["general", "news", "finance"],
+        Field(
+            default="general",
+            description=(
+                "The category of the search. 'news' is useful for retrieving "
+                "real-time updates, particularly about politics, sports, and "
+                "major current events. 'finance' is for financial information. "
+                "'general' is for broader, more general-purpose searches."
+            ),
+        ),
+    ] = "general",
+    days: Annotated[
+        int,
+        Field(default=3, description="Number of days back to search"),
+    ] = 3,
+    time_range: Annotated[
+        Optional[Literal["day", "week", "month", "year"]],
+        Field(
+            default=None,
+            description=(
+                "The time range back from the current date to include "
+                "in the search results"
+            ),
+        ),
+    ] = None,
+    start_date: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description=(
+                "Will return all results after the specified start date. "
+                "Required to be written in the format YYYY-MM-DD."
+            ),
+        ),
+    ] = None,
+    end_date: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description=(
+                "Will return all results before the specified end date. "
+                "Required to be written in the format YYYY-MM-DD"
+            ),
+        ),
+    ] = None,
+    max_results: Annotated[
+        int,
+        Field(
+            default=5,
+            ge=5,
+            le=20,
+            description="The maximum number of search results to return",
+        ),
+    ] = 5,
+    include_images: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Include a list of query-related images in the response",
+        ),
+    ] = False,
+    include_image_descriptions: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Include a list of query-related images and their "
+                "descriptions in the response"
+            ),
+        ),
+    ] = False,
+    include_raw_content: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Include the cleaned and parsed HTML content of each "
+                "search result"
+            ),
+        ),
+    ] = False,
+    include_domains: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description=(
+                "A list of domains to specifically include in the search "
+                "results, if the user asks to search on specific sites set "
+                "this to the domain of the site"
+            ),
+        ),
+    ] = None,
+    exclude_domains: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description=(
+                "List of domains to specifically exclude, if the user asks "
+                "to exclude a domain set this to the domain of the site"
+            ),
+        ),
+    ] = None,
+    country: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description=(
+                "Boost search results from a specific country. Must be a "
+                "full country name (e.g., 'United States', 'Japan', "
+                "'Germany'). ISO country codes (e.g., 'us', 'jp') are not "
+                "supported. Available only if topic is general. See "
+                "https://docs.tavily.com/documentation/api-reference/search "
+                "for the full list of supported countries."
+            ),
+        ),
+    ] = None,
+    include_favicon: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Whether to include the favicon URL for each result",
+        ),
+    ] = False,
 ) -> dict:
-    """Search the web for current information on any topic.
-
-    Use for news, facts, or data. Returns snippets and source URLs.
-    """
+    """Search the web for current information on any topic. Use for news, facts, or data beyond your knowledge cutoff. Returns snippets and source URLs."""
     params = _strip_none(locals())
     return await _route_request("search", params)
 
 
 @mcp.tool(name="tavily-extract")
 async def tavily_extract(
-    urls: list[str],
-    extract_depth: str = "basic",
-    include_images: bool = False,
-    format: str = "markdown",
-    include_favicon: bool = False,
+    urls: Annotated[
+        list[str],
+        Field(description="List of URLs to extract content from"),
+    ],
+    query: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description=(
+                "Query to rerank content chunks by relevance. When provided, "
+                "chunks are reranked based on relevance to this query."
+            ),
+        ),
+    ] = None,
+    extract_depth: Annotated[
+        Literal["basic", "advanced"],
+        Field(
+            default="basic",
+            description=(
+                "Use 'advanced' for LinkedIn, protected sites, or "
+                "tables/embedded content"
+            ),
+        ),
+    ] = "basic",
+    include_images: Annotated[
+        bool,
+        Field(default=False, description="Include images from pages"),
+    ] = False,
+    format: Annotated[
+        Literal["markdown", "text"],
+        Field(default="markdown", description="Output format"),
+    ] = "markdown",
+    include_favicon: Annotated[
+        bool,
+        Field(default=False, description="Include favicon URLs"),
+    ] = False,
 ) -> dict:
-    """Extract content from URLs.
-
-    Returns raw page content in markdown or text format.
-    """
+    """Extract content from URLs. Returns raw page content in markdown or text format."""
     params = _strip_none(locals())
     return await _route_request("extract", params)
 
 
 @mcp.tool(name="tavily-crawl")
 async def tavily_crawl(
-    url: str,
-    max_depth: int = 1,
-    max_breadth: int = 20,
-    limit: int = 50,
-    instructions: Optional[str] = None,
-    select_paths: Optional[list[str]] = None,
-    select_domains: Optional[list[str]] = None,
-    allow_external: bool = True,
-    extract_depth: str = "basic",
-    format: str = "markdown",
-    include_favicon: bool = False,
+    url: Annotated[
+        str,
+        Field(description="The root URL to begin the crawl"),
+    ],
+    max_depth: Annotated[
+        int,
+        Field(
+            default=1,
+            ge=1,
+            description=(
+                "Max depth of the crawl. Defines how far from the base "
+                "URL the crawler can explore."
+            ),
+        ),
+    ] = 1,
+    max_breadth: Annotated[
+        int,
+        Field(
+            default=20,
+            ge=1,
+            description=(
+                "Max number of links to follow per level of the tree "
+                "(i.e., per page)"
+            ),
+        ),
+    ] = 20,
+    limit: Annotated[
+        int,
+        Field(
+            default=50,
+            ge=1,
+            description=(
+                "Total number of links the crawler will process before stopping"
+            ),
+        ),
+    ] = 50,
+    instructions: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description=(
+                "Natural language instructions for the crawler. Instructions "
+                "specify which types of pages the crawler should return."
+            ),
+        ),
+    ] = None,
+    select_paths: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description=(
+                "Regex patterns to select only URLs with specific path "
+                "patterns (e.g., /docs/.*, /api/v1.*)"
+            ),
+        ),
+    ] = None,
+    select_domains: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description=(
+                "Regex patterns to restrict crawling to specific domains "
+                "or subdomains (e.g., ^docs\\.example\\.com$)"
+            ),
+        ),
+    ] = None,
+    allow_external: Annotated[
+        bool,
+        Field(
+            default=True,
+            description="Whether to return external links in the final response",
+        ),
+    ] = True,
+    extract_depth: Annotated[
+        Literal["basic", "advanced"],
+        Field(
+            default="basic",
+            description=(
+                "Advanced extraction retrieves more data, including tables "
+                "and embedded content, with higher success but may increase "
+                "latency"
+            ),
+        ),
+    ] = "basic",
+    format: Annotated[
+        Literal["markdown", "text"],
+        Field(
+            default="markdown",
+            description=(
+                "The format of the extracted web page content. markdown "
+                "returns content in markdown format. text returns plain "
+                "text and may increase latency."
+            ),
+        ),
+    ] = "markdown",
+    include_favicon: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Whether to include the favicon URL for each result",
+        ),
+    ] = False,
 ) -> dict:
-    """Crawl a website starting from a URL.
-
-    Extracts content from pages with configurable depth and breadth.
-    """
+    """Crawl a website starting from a URL. Extracts content from pages with configurable depth and breadth."""
     params = _strip_none(locals())
     return await _route_request("crawl", params)
 
 
 @mcp.tool(name="tavily-map")
 async def tavily_map(
-    url: str,
-    max_depth: int = 1,
-    max_breadth: int = 20,
-    limit: int = 50,
-    instructions: Optional[str] = None,
-    select_paths: Optional[list[str]] = None,
-    select_domains: Optional[list[str]] = None,
-    allow_external: bool = True,
+    url: Annotated[
+        str,
+        Field(description="The root URL to begin the mapping"),
+    ],
+    max_depth: Annotated[
+        int,
+        Field(
+            default=1,
+            ge=1,
+            description=(
+                "Max depth of the mapping. Defines how far from the base "
+                "URL the crawler can explore"
+            ),
+        ),
+    ] = 1,
+    max_breadth: Annotated[
+        int,
+        Field(
+            default=20,
+            ge=1,
+            description=(
+                "Max number of links to follow per level of the tree "
+                "(i.e., per page)"
+            ),
+        ),
+    ] = 20,
+    limit: Annotated[
+        int,
+        Field(
+            default=50,
+            ge=1,
+            description=(
+                "Total number of links the crawler will process before stopping"
+            ),
+        ),
+    ] = 50,
+    instructions: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Natural language instructions for the crawler",
+        ),
+    ] = None,
+    select_paths: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description=(
+                "Regex patterns to select only URLs with specific path "
+                "patterns (e.g., /docs/.*, /api/v1.*)"
+            ),
+        ),
+    ] = None,
+    select_domains: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description=(
+                "Regex patterns to restrict crawling to specific domains "
+                "or subdomains (e.g., ^docs\\.example\\.com$)"
+            ),
+        ),
+    ] = None,
+    allow_external: Annotated[
+        bool,
+        Field(
+            default=True,
+            description="Whether to return external links in the final response",
+        ),
+    ] = True,
 ) -> dict:
-    """Map a website's structure.
-
-    Returns a list of URLs found starting from the base URL.
-    """
+    """Map a website's structure. Returns a list of URLs found starting from the base URL."""
     params = _strip_none(locals())
     return await _route_request("map", params)
 

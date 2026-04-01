@@ -68,6 +68,7 @@ async def _route_request(endpoint: str, params: dict) -> dict:
             result = await client.request(endpoint, key, params)
             actual = result.get("usage", {}).get("credits", estimated)
             await router.report_usage(key, actual)
+            result["_credits_remaining"] = _credits_summary()
             return result
         except TavilyAPIError as exc:
             if exc.status_code == 429 and attempt < _MAX_RETRIES - 1:
@@ -491,6 +492,16 @@ async def credit_status() -> dict:
 def _strip_none(d: dict) -> dict:
     """Remove None values from a dict (used to build API payloads)."""
     return {k: v for k, v in d.items() if v is not None}
+
+
+def _credits_summary() -> str:
+    """One-line credit summary appended to every tool response."""
+    statuses = router.get_status()
+    total_used = sum(s["used"] for s in statuses)
+    total_limit = sum(s["limit"] for s in statuses)
+    total_remaining = total_limit - total_used
+    pct = round(total_remaining / total_limit * 100, 1) if total_limit > 0 else 0
+    return f"{total_remaining}/{total_limit} credits remaining ({pct}%)"
 
 
 # ── entrypoint ─────────────────────────────────────────────────

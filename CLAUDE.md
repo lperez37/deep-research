@@ -33,6 +33,44 @@ TAVILY_API_KEYS=key1,key2 TRANSPORT=http python -m deep_research
 docker compose up -d
 ```
 
+## Deployment
+
+Production runs in Docker on `vps` at `~/apps/deep-research`, exposing
+`http://vps:8087/mcp`. Container name: `deep-research-deep-research-1`.
+
+### Code changes — commit/push locally, then pull/deploy on VPS
+
+```bash
+# 1. Locally: commit and push to origin/main
+git add <files> && git commit -m "..." && git push
+
+# 2. On VPS: pull and restart
+ssh luis@vps "cd ~/apps/deep-research && git pull && docker compose up -d --build"
+
+# 3. Verify
+ssh luis@vps "docker compose -f ~/apps/deep-research/docker-compose.yml ps"
+ssh luis@vps "docker logs deep-research-deep-research-1 2>&1 | grep 'Starting deep-research'"
+```
+
+### Config changes — edit `.env` directly on VPS
+
+`.env` is gitignored, so secrets (Tavily keys, `AUTH_TOKEN`) are not in git.
+Mirror changes by hand:
+
+```bash
+# 1. Edit local .env (for stdio/dev use)
+# 2. Edit VPS .env and recreate container so env_file is re-read
+ssh luis@vps "vi ~/apps/deep-research/.env"
+ssh luis@vps "cd ~/apps/deep-research && docker compose up -d --force-recreate"
+
+# 3. Verify the new key count / values were picked up
+ssh luis@vps "docker logs deep-research-deep-research-1 2>&1 | grep 'Starting deep-research'"
+# Or call credit-status via MCP to see all keys live (see SETUP.md troubleshooting)
+```
+
+`docker compose restart` alone does NOT re-read `env_file` — use
+`up -d --force-recreate` after editing `.env`.
+
 ## Tech Stack
 
 - **Python 3.11+**

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -20,6 +21,7 @@ CREDITS_PER_KEY = 1000
 def _make_router(
     keys: list[str] | None = None,
     credits_per_key: int = CREDITS_PER_KEY,
+    cooldown_hours: float = 24.0,
 ) -> tuple[KeyRouter, CreditTracker]:
     """Create a KeyRouter backed by a fresh in-memory CreditTracker."""
     tracker = CreditTracker(":memory:")
@@ -27,6 +29,7 @@ def _make_router(
         keys=keys if keys is not None else list(KEYS),
         credits_per_key=credits_per_key,
         tracker=tracker,
+        cooldown_hours=cooldown_hours,
     )
     return router, tracker
 
@@ -126,7 +129,7 @@ class TestAllKeysExhausted:
         for key in KEYS:
             tracker.add_usage(key, 50)
 
-        with pytest.raises(RuntimeError, match="All API keys have exhausted"):
+        with pytest.raises(RuntimeError, match="exhausted or in cooldown"):
             await router.get_key()
 
     async def test_recovers_if_one_key_freed(self) -> None:
@@ -174,42 +177,87 @@ class TestReportUsage:
 
 
 # ---------------------------------------------------------------------------
-# 6. force_exhaust marks a key as fully used
+# 6. mark_rate_limited sets a cooldown and skips the key during it
 # ---------------------------------------------------------------------------
 
 
-class TestForceExhaust:
-    async def test_force_exhaust_fills_to_limit(self) -> None:
-        router, tracker = _make_router(credits_per_key=500)
+class TestMarkRateLimited:
+    async def test_mark_sets_future_cooldown(self) -> None:
+        """After mark_rate_limited, get_cooldown returns a future timestamp."""
+        router, tracker = _make_router(cooldown_hours=24)
 
+        before = int(time.time())
+        await router.mark_rate_limited(KEYS[0])
+
+        cooldown_until = tracker.get_cooldown(KEYS[0])
+        assert cooldown_until > before
+        # Should be ~24h in the future (allow generous slack for slow CI).
+        assert cooldown_until - before >= 24 * 3600 - 5
+        assert cooldown_until - before <= 24 * 3600 + 5
+
+    async def test_does_not_inflate_usage_counter(self) -> None:
+        """A 429 cooldown must not touch the credit counter — only the cooldown table."""
+        router, tracker = _make_router(credits_per_key=1000)
         tracker.add_usage(KEYS[0], 200)
-        await router.force_exhaust(KEYS[0])
 
-        assert tracker.get_usage(KEYS[0]) == 500
+        await router.mark_rate_limited(KEYS[0])
 
-    async def test_force_exhaust_on_unused_key(self) -> None:
-        """Force-exhausting a key with zero usage fills it completely."""
-        router, tracker = _make_router(credits_per_key=300)
+        # Usage is unchanged: cooldown is the gate, not credit inflation.
+        assert tracker.get_usage(KEYS[0]) == 200
 
-        await router.force_exhaust(KEYS[2])
+    async def test_get_key_skips_cooled_key(self) -> None:
+        """After mark_rate_limited, get_key must skip that key."""
+        router, _ = _make_router()
 
-        assert tracker.get_usage(KEYS[2]) == 300
+        await router.mark_rate_limited(KEYS[0])
 
-    async def test_force_exhaust_on_already_exhausted_key(self) -> None:
-        """Force-exhausting an already-exhausted key is a no-op."""
-        router, tracker = _make_router(credits_per_key=100)
+        result = await router.get_key()
+        assert result == KEYS[1]
 
-        tracker.add_usage(KEYS[0], 100)
-        await router.force_exhaust(KEYS[0])
+    async def test_get_key_returns_key_after_cooldown_expires(self) -> None:
+        """Once cooldown timestamp is in the past, the key is eligible again."""
+        router, tracker = _make_router()
 
-        assert tracker.get_usage(KEYS[0]) == 100
+        # Manually set cooldown to a timestamp already in the past.
+        tracker.set_cooldown(KEYS[0], int(time.time()) - 10)
 
-    async def test_get_key_skips_force_exhausted(self) -> None:
-        """After force_exhaust, get_key must skip that key."""
-        router, _ = _make_router(credits_per_key=100)
+        # All three keys are eligible; round-robin starts at index 0.
+        result = await router.get_key()
+        assert result == KEYS[0]
 
-        await router.force_exhaust(KEYS[0])
+    async def test_mark_extends_existing_cooldown(self) -> None:
+        """A second mark_rate_limited call extends the cooldown forward."""
+        router, tracker = _make_router(cooldown_hours=24)
 
+        # First mark: 24h cooldown.
+        await router.mark_rate_limited(KEYS[0])
+        first_until = tracker.get_cooldown(KEYS[0])
+
+        # Force a small wait, then mark again — second cooldown must be later.
+        time.sleep(0.01)
+        await router.mark_rate_limited(KEYS[0])
+        second_until = tracker.get_cooldown(KEYS[0])
+
+        assert second_until >= first_until
+
+    async def test_raises_when_all_keys_cooled(self) -> None:
+        """If every key is in cooldown, get_key raises even with budget left."""
+        router, _ = _make_router(credits_per_key=1000)
+
+        for key in KEYS:
+            await router.mark_rate_limited(key)
+
+        with pytest.raises(RuntimeError, match="exhausted or in cooldown"):
+            await router.get_key()
+
+    async def test_cooldown_independent_of_budget(self) -> None:
+        """A key with zero usage but active cooldown must be skipped."""
+        router, _ = _make_router(credits_per_key=1000)
+
+        # KEYS[0] has 0/1000 used but is in cooldown.
+        await router.mark_rate_limited(KEYS[0])
+
+        # Expect KEYS[1] (next in rotation).
         result = await router.get_key()
         assert result == KEYS[1]
 
@@ -230,7 +278,22 @@ class TestGetStatus:
         assert len(statuses) == 3
 
         first = statuses[0]
-        assert set(first.keys()) == {"key", "used", "limit", "remaining", "utilization_pct"}
+        assert set(first.keys()) == {
+            "key", "used", "limit", "remaining", "utilization_pct",
+            "in_cooldown", "cooldown_until",
+        }
+
+    async def test_status_reflects_cooldown(self) -> None:
+        """A cooled-down key reports in_cooldown=True with a future timestamp."""
+        router, _ = _make_router()
+
+        await router.mark_rate_limited(KEYS[1])
+
+        statuses = router.get_status()
+        cooled = next(s for s in statuses if s["key"].endswith("dddd"))
+
+        assert cooled["in_cooldown"] is True
+        assert cooled["cooldown_until"] > int(time.time())
 
     def test_status_values(self) -> None:
         router, tracker = _make_router(credits_per_key=1000)

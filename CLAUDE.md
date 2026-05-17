@@ -94,9 +94,14 @@ ssh luis@vps "docker logs deep-research-deep-research-1 2>&1 | grep 'Starting de
    token middleware is registered. Stdio transport skips auth since the client
    already has local process access.
 
-4. **429 retry with key rotation**: On rate limit errors, the current key is
-   force-exhausted and the request retries with the next available key (up to 3
-   attempts).
+4. **429 retry with cooldown rotation**: On rate limit errors, the current key
+   is placed in a time-bounded **cooldown** (default 24h, via `COOLDOWN_HOURS`)
+   and the request retries with the next available key (up to 3 attempts).
+   Cooldown is stored separately from the usage counter, so a 429 doesn't
+   inflate local credit accounting. The cooldown table survives monthly
+   rollover, so a stale 429 near a period boundary can't permanently lock a
+   key out of the new month — once the cooldown expires the router probes
+   the key again and resumes normal rotation if it succeeds.
 
 ## Environment Variables
 
@@ -104,6 +109,7 @@ ssh luis@vps "docker logs deep-research-deep-research-1 2>&1 | grep 'Starting de
 |----------|----------|---------|
 | `TAVILY_API_KEYS` | Yes | — |
 | `CREDITS_PER_KEY` | No | `1000` |
+| `COOLDOWN_HOURS` | No | `24` |
 | `DB_PATH` | No | `/data/credits.db` |
 | `TRANSPORT` | No | `stdio` |
 | `HOST` | No | `0.0.0.0` |

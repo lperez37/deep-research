@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     # Monthly credit budget per key (free tier = 1000)
     credits_per_key: int = 1000
 
+    # Hours to skip a key after Tavily returns 429 on it. After the cooldown
+    # expires the key is probed again; if it 429s again, cooldown re-extends.
+    # Survives monthly rollover so a stale 429 doesn't lock the key out of the
+    # new period — we always re-probe instead.
+    cooldown_hours: float = 24.0
+
     # Key selection strategy
     routing_strategy: str = "round-robin"
 

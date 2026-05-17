@@ -26,6 +26,7 @@ router = KeyRouter(
     keys=settings.api_keys,
     credits_per_key=settings.credits_per_key,
     tracker=tracker,
+    cooldown_hours=settings.cooldown_hours,
 )
 client = TavilyClient(base_url=settings.tavily_base_url)
 
@@ -72,14 +73,20 @@ async def _route_request(endpoint: str, params: dict) -> dict:
             return result
         except TavilyAPIError as exc:
             if exc.status_code == 429 and attempt < _MAX_RETRIES - 1:
-                logger.warning("Key %s...%s hit 429 — rotating", key[:8], key[-4:])
-                await router.force_exhaust(key)
+                logger.warning(
+                    "Key %s...%s hit 429 — cooling down for %sh",
+                    key[:8], key[-4:], settings.cooldown_hours,
+                )
+                await router.mark_rate_limited(key)
                 continue
             raise
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429 and attempt < _MAX_RETRIES - 1:
-                logger.warning("Key %s...%s hit 429 — rotating", key[:8], key[-4:])
-                await router.force_exhaust(key)
+                logger.warning(
+                    "Key %s...%s hit 429 — cooling down for %sh",
+                    key[:8], key[-4:], settings.cooldown_hours,
+                )
+                await router.mark_rate_limited(key)
                 continue
             raise
 

@@ -73,6 +73,35 @@ class TestCreditTrackerGetAllUsage:
         assert tracker.get_all_usage() == {}
 
 
+class TestCreditTrackerCooldown:
+    """CreditTracker.get_cooldown / set_cooldown behaviour."""
+
+    def test_returns_zero_for_unknown_key(self, tracker: CreditTracker) -> None:
+        assert tracker.get_cooldown("never-cooled-key") == 0
+
+    def test_set_then_get_roundtrip(self, tracker: CreditTracker) -> None:
+        tracker.set_cooldown("key-a", 1_700_000_000)
+        assert tracker.get_cooldown("key-a") == 1_700_000_000
+
+    def test_set_overwrites_previous_value(self, tracker: CreditTracker) -> None:
+        tracker.set_cooldown("key-a", 1_700_000_000)
+        tracker.set_cooldown("key-a", 1_800_000_000)
+        assert tracker.get_cooldown("key-a") == 1_800_000_000
+
+    def test_cooldown_is_per_key(self, tracker: CreditTracker) -> None:
+        tracker.set_cooldown("key-a", 1_700_000_000)
+        tracker.set_cooldown("key-b", 1_800_000_000)
+        assert tracker.get_cooldown("key-a") == 1_700_000_000
+        assert tracker.get_cooldown("key-b") == 1_800_000_000
+
+    def test_cooldown_independent_of_usage(self, tracker: CreditTracker) -> None:
+        """Setting cooldown must not affect the usage counter, and vice versa."""
+        tracker.add_usage("key-a", 50)
+        tracker.set_cooldown("key-a", 1_700_000_000)
+        assert tracker.get_usage("key-a") == 50
+        assert tracker.get_cooldown("key-a") == 1_700_000_000
+
+
 class TestCreditTrackerClose:
     """CreditTracker.close behaviour."""
 

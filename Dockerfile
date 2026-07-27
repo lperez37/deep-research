@@ -35,8 +35,8 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 
 # Copy application source
-COPY pyproject.toml ./
-COPY deep_research/ ./deep_research/
+COPY --chown=appuser:appuser pyproject.toml ./
+COPY --chown=appuser:appuser deep_research/ ./deep_research/
 
 # Ensure the venv's Python is on PATH
 ENV PATH="/app/.venv/bin:${PATH}" \

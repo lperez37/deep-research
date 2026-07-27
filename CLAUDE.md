@@ -9,9 +9,11 @@ keys to multiply free-tier credit allowances (1,000 credits/key/month).
 ## Architecture
 
 - `deep_research/config.py` — Pydantic settings from env vars
-- `deep_research/credits.py` — SQLite credit tracker (WAL mode) + cost estimation
+- `deep_research/credits.py` — SQLite credit tracker, audit store and cost estimation
 - `deep_research/router.py` — Round-robin key selection with credit-aware skipping
 - `deep_research/tavily_client.py` — Async httpx wrapper for Tavily REST API
+- `deep_research/audit.py` — MCP and HTTP requester metadata extraction
+- `deep_research/auth.py` — FastMCP bearer-token verifier
 - `deep_research/server.py` — FastMCP server with 5 tools (4 Tavily + credit-status)
 
 ## Quick Commands
@@ -20,7 +22,7 @@ keys to multiply free-tier credit allowances (1,000 credits/key/month).
 # Install
 pip install -e ".[dev]"
 
-# Run tests (63 tests, all should pass)
+# Run the complete test suite
 pytest
 
 # Run server (stdio mode)
@@ -90,9 +92,8 @@ ssh luis@vps "docker logs deep-research-deep-research-1 2>&1 | grep 'Starting de
    crash-safe, concurrent-safe persistence. Monthly reset is implicit — queries
    filter by `YYYY-MM` period.
 
-3. **No auth by default**: The `AUTH_TOKEN` env var is optional. When set, a bearer
-   token middleware is registered. Stdio transport skips auth since the client
-   already has local process access.
+3. **Network auth is fail-closed**: HTTP and SSE require `AUTH_TOKEN` unless the
+   explicit development override is set. Stdio remains a local process transport.
 
 4. **429 retry with cooldown rotation**: On rate limit errors, the current key
    is placed in a time-bounded **cooldown** (default 24h, via `COOLDOWN_HOURS`)
@@ -114,7 +115,12 @@ ssh luis@vps "docker logs deep-research-deep-research-1 2>&1 | grep 'Starting de
 | `TRANSPORT` | No | `stdio` |
 | `HOST` | No | `0.0.0.0` |
 | `PORT` | No | `8000` |
-| `AUTH_TOKEN` | No | empty (no auth) |
+| `AUTH_TOKEN` | HTTP/SSE | empty for stdio |
+| `ALLOW_UNAUTHENTICATED_HTTP` | No | `false` |
+| `TRUST_PROXY_HEADERS` | No | `false` |
+| `AUDIT_MAX_TEXT_CHARS` | No | `8192` |
+| `AUDIT_RETENTION_DAYS` | No | `90` |
+| `AUDIT_BUSY_TIMEOUT_SECONDS` | No | `0.1` |
 
 ## Testing
 
@@ -123,5 +129,5 @@ account needed. Run with `pytest -v` for verbose output.
 
 ## File Size Guidelines
 
-- Source files are 30–200 lines each (intentionally small and focused)
-- No file exceeds 400 lines
+- Keep focused functionality in separate modules rather than expanding `server.py`
+- Preserve exact public Tavily tool schemas when changing internal routing

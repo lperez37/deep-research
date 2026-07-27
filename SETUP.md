@@ -9,11 +9,12 @@ git clone git@github.com:lperez37/deep-research.git
 cd deep-research
 ```
 
-Create `.env` with your Tavily API keys:
+Create `.env` with your Tavily API keys and a strong bearer token:
 
 ```bash
 cat > .env << 'EOF'
 TAVILY_API_KEYS=tvly-key1,tvly-key2
+AUTH_TOKEN=replace-with-a-long-random-token
 EOF
 ```
 
@@ -49,7 +50,9 @@ claude mcp remove tavily -s user
 ### Step 2: Add deep-research
 
 ```bash
-claude mcp add tavily -s user -t http http://vps:8087/mcp
+claude mcp add tavily -s user -t http \
+  -H "Authorization: Bearer replace-with-a-long-random-token" \
+  http://vps:8087/mcp
 ```
 
 **Key flags:**
@@ -109,7 +112,10 @@ useful for sharing config across machines or checking it into a project.
   "mcpServers": {
     "tavily": {
       "type": "http",
-      "url": "http://vps:8087/mcp"
+      "url": "http://vps:8087/mcp",
+      "headers": {
+        "Authorization": "Bearer replace-with-a-long-random-token"
+      }
     }
   }
 }
@@ -122,25 +128,28 @@ useful for sharing config across machines or checking it into a project.
   "mcpServers": {
     "tavily": {
       "type": "http",
-      "url": "http://vps:8087/mcp"
+      "url": "http://vps:8087/mcp",
+      "headers": {
+        "Authorization": "Bearer replace-with-a-long-random-token"
+      }
     }
   }
 }
 ```
 
-## Optional: Protect with a bearer token
+## Changing the bearer token
 
-On the VPS, add `AUTH_TOKEN` to `.env`:
+On the VPS, update `AUTH_TOKEN` in `.env`:
 
 ```
 TAVILY_API_KEYS=tvly-key1,tvly-key2
 AUTH_TOKEN=some-secret-token
 ```
 
-Restart:
+Recreate the container so Docker Compose reloads `.env`:
 
 ```bash
-docker compose restart
+docker compose up -d --force-recreate
 ```
 
 Then re-add with the header:
@@ -186,7 +195,7 @@ Check the container is running and the port is open:
 
 ```bash
 ssh user@vps "docker compose -f ~/apps/deep-research/docker-compose.yml ps"
-ssh user@vps "curl -s http://localhost:8087/mcp -X POST -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}'"
+ssh user@vps "curl -s http://localhost:8087/mcp -X POST -H 'Authorization: Bearer replace-with-a-long-random-token' -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}'"
 ```
 
 ### Check container logs
@@ -204,5 +213,7 @@ Use `-t http` before the URL:
 claude mcp add tavily --url http://vps:8087/mcp
 
 # Correct
-claude mcp add tavily -t http http://vps:8087/mcp
+claude mcp add tavily -t http \
+  -H "Authorization: Bearer YOUR_AUTH_TOKEN" \
+  http://vps:8087/mcp
 ```

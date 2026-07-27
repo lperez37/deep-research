@@ -67,6 +67,7 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
     credits_used = None
     last_rate_limit_error = None
     audit_id = None
+    upstream_succeeded = False
     audit_start = asyncio.create_task(_start_audit(endpoint, params, ctx))
 
     try:
@@ -83,6 +84,7 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
                 result = await client.request(endpoint, key, params)
                 actual = result.get("usage", {}).get("credits", estimated)
                 credits_used = actual
+                upstream_succeeded = True
                 await router.report_usage(key, actual)
                 result["_credits_remaining"] = await _credits_summary()
                 await _finish_audit(
@@ -129,6 +131,7 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
                 credits=credits_used,
                 attempts=attempts,
                 started=started,
+                upstream_succeeded=upstream_succeeded,
             )
         )
         try:
@@ -559,16 +562,14 @@ async def credit_status() -> dict:
 
 async def _start_audit(endpoint: str, params: dict, ctx: Context) -> int | None:
     """Start audit logging without making observability an availability risk."""
-    query = params.get("query")
-    if query is None:
-        query = params.get("instructions")
-    if query is not None and not isinstance(query, str):
-        query = str(query)
-    query = _bounded_audit_text(query)
-
-    target = _audit_target(params)
-
     try:
+        query = params.get("query")
+        if query is None:
+            query = params.get("instructions")
+        if query is not None and not isinstance(query, str):
+            query = str(query)
+        query = _bounded_audit_text(query)
+        target = _audit_target(params)
         metadata = requester_metadata(
             ctx, trust_proxy_headers=settings.trust_proxy_headers
         )
@@ -591,17 +592,18 @@ async def _finalize_cancelled_audit(
     attempts: int,
     started: float,
     credits: int | None,
+    upstream_succeeded: bool,
 ) -> None:
     """Finalize cancellation independently of repeated request-task cancellation."""
     if audit_id is None:
         audit_id = await asyncio.shield(audit_start)
     await _finish_audit(
         audit_id,
-        status="cancelled",
+        status="succeeded" if upstream_succeeded else "cancelled",
         credits=credits,
         attempts=attempts,
         started=started,
-        error_code="CancelledError",
+        error_code=None if upstream_succeeded else "CancelledError",
     )
 
 

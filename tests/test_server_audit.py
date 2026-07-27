@@ -13,10 +13,21 @@ import pytest
 from fastmcp import Client
 from mcp.types import Implementation
 
-os.environ.setdefault("TAVILY_API_KEYS", "test-key-12345678")
-os.environ.setdefault("DB_PATH", ":memory:")
+_SERVER_ENV = {
+    "TAVILY_API_KEYS": "test-key-12345678",
+    "DB_PATH": ":memory:",
+}
+_ORIGINAL_SERVER_ENV = {name: os.environ.get(name) for name in _SERVER_ENV}
+os.environ.update(_SERVER_ENV)
+try:
+    from deep_research import server
+finally:
+    for name, value in _ORIGINAL_SERVER_ENV.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
-from deep_research import server
 from deep_research.credits import CreditTracker
 from deep_research.router import KeyRouter
 from deep_research.tavily_client import TavilyAPIError
@@ -394,6 +405,58 @@ async def test_cancelled_request_is_completed_as_cancelled(monkeypatch) -> None:
         assert row["status"] == "cancelled"
         assert row["completed_at"] is not None
         assert row["error_code"] == "CancelledError"
+    finally:
+        tracker.close()
+
+
+async def test_cancellation_after_upstream_success_keeps_success_status(
+    monkeypatch,
+) -> None:
+    tracker = await _install_test_dependencies(monkeypatch)
+    monkeypatch.setattr(server, "client", GenericSuccessfulClient())
+    reporting_started = asyncio.Event()
+
+    async def blocked_report_usage(key: str, credits: int) -> None:
+        reporting_started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(server.router, "report_usage", blocked_report_usage)
+
+    try:
+        async with Client(server.mcp, name="post-success-cancellation-tester") as client:
+            call = asyncio.create_task(
+                client.call_tool("tavily-search", {"query": "completed upstream"})
+            )
+            await asyncio.wait_for(reporting_started.wait(), timeout=1)
+            call.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await call
+
+        row = tracker.get_recent_requests()[0]
+        for _ in range(100):
+            if row["status"] == "succeeded":
+                break
+            await asyncio.sleep(0.01)
+            row = tracker.get_recent_requests()[0]
+        assert row["status"] == "succeeded"
+        assert row["credits"] == 1
+        assert row["attempts"] == 1
+        assert row["error_code"] is None
+    finally:
+        tracker.close()
+
+
+async def test_malformed_audit_text_does_not_block_upstream(monkeypatch) -> None:
+    tracker = await _install_test_dependencies(monkeypatch)
+    monkeypatch.setattr(server, "client", GenericSuccessfulClient())
+    query = "q" * server.settings.audit_max_text_chars + "\ud800"
+
+    try:
+        async with Client(server.mcp, name="malformed-audit-tester") as client:
+            result = await client.call_tool("tavily-search", {"query": query})
+
+        assert result.data["endpoint"] == "search"
+        assert tracker.get_recent_requests() == []
     finally:
         tracker.close()
 

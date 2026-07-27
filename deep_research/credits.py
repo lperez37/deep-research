@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
 
+_REQUEST_LOG_MAINTENANCE_INTERVAL_SECONDS = 24 * 60 * 60
+
 
 def _current_period() -> str:
     """Return current billing period as 'YYYY-MM'."""
@@ -136,9 +138,13 @@ class CreditTracker:
             "ON request_log(hostname, created_at)"
         )
         self._conn.commit()
+        self._request_log_retention_days = request_log_retention_days
         self.reconcile_abandoned_requests()
         if request_log_retention_days:
             self.prune_request_log(request_log_retention_days)
+        self._next_request_log_maintenance = (
+            time.monotonic() + _REQUEST_LOG_MAINTENANCE_INTERVAL_SECONDS
+        )
         if db_path != ":memory:":
             self._secure_database_files(path)
 
@@ -251,6 +257,7 @@ class CreditTracker:
         requester: Mapping[str, str | None],
     ) -> int:
         """Create an audit row before forwarding a request to Tavily."""
+        self._maintain_request_log()
         cursor = self._conn.execute(
             """
             INSERT INTO request_log (
@@ -279,6 +286,18 @@ class CreditTracker:
         if cursor.lastrowid is None:  # pragma: no cover - SQLite always supplies it
             raise RuntimeError("SQLite did not return a request log row ID")
         return cursor.lastrowid
+
+    def _maintain_request_log(self) -> None:
+        """Periodically reconcile and prune audit rows during long uptimes."""
+        now = time.monotonic()
+        if now < self._next_request_log_maintenance:
+            return
+        self.reconcile_abandoned_requests()
+        if self._request_log_retention_days:
+            self.prune_request_log(self._request_log_retention_days)
+        self._next_request_log_maintenance = (
+            now + _REQUEST_LOG_MAINTENANCE_INTERVAL_SECONDS
+        )
 
     @_locked
     def finish_request(

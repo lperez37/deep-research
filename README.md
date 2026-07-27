@@ -57,6 +57,11 @@ docker compose up -d
 
 The MCP endpoint is now at `http://your-host:8087/mcp`.
 
+Use plain HTTP only across an encrypted private network such as Tailscale. Put
+the service behind an HTTPS reverse proxy before exposing it to the public
+internet; bearer tokens and search contents must not cross an untrusted network
+in plaintext.
+
 ### 3. Connect from Claude Code
 
 Remove the official Tavily MCP if you have it:
@@ -186,10 +191,10 @@ docker compose exec deep-research /app/.venv/bin/python -c \
   "import sqlite3; c=sqlite3.connect('/data/credits.db'); n=c.execute(\"DELETE FROM request_log WHERE julianday(created_at) < julianday('now', '-90 days')\").rowcount; c.commit(); print(f'deleted {n} rows')"
 ```
 
-Completed rows older than `AUDIT_RETENTION_DAYS` are deleted on startup, with a
-default retention of 90 days. Rows left in `started` for more than 24 hours are
-classified as `abandoned` with error code `process_restart` before retention is
-applied.
+Completed rows older than `AUDIT_RETENTION_DAYS` are deleted on startup and by
+daily maintenance while the service remains running, with a default retention
+of 90 days. Rows left in `started` for more than 24 hours are classified as
+`abandoned` before retention is applied.
 
 ## Authentication
 

@@ -321,6 +321,39 @@ class TestRequestAuditLog:
         finally:
             reopened.close()
 
+    def test_retention_runs_periodically_without_restart(
+        self, tracker: CreditTracker
+    ) -> None:
+        expired_id = tracker.start_request(
+            endpoint="search",
+            query="expired",
+            target=None,
+            requester={},
+        )
+        tracker.finish_request(
+            expired_id,
+            status="succeeded",
+            attempts=1,
+            duration_ms=1,
+        )
+        tracker._conn.execute(
+            "UPDATE request_log SET created_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", expired_id),
+        )
+        tracker._conn.commit()
+        tracker._request_log_retention_days = 90
+        tracker._next_request_log_maintenance = 0
+
+        current_id = tracker.start_request(
+            endpoint="search",
+            query="current",
+            target=None,
+            requester={},
+        )
+
+        rows = tracker.get_recent_requests()
+        assert [row["id"] for row in rows] == [current_id]
+
 
 # ── estimate_credits ─────────────────────────────────────────────────────
 

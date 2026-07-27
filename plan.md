@@ -146,7 +146,7 @@ tavily-router/
 ```
 
 **Dependencies:**
-- `fastmcp>=2.0` — MCP server framework
+- `fastmcp>=3.4.5,<4` — MCP server framework
 - `httpx` — async HTTP client for Tavily REST API calls
 - `pydantic` or `pydantic-settings` — config/env parsing
 - `pytest`, `pytest-asyncio`, `respx` — testing

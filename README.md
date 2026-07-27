@@ -18,7 +18,7 @@ The `tavily-research` endpoint is deliberately excluded. A single research call 
 
 deep-research is a [FastMCP](https://github.com/jlowin/fastmcp) server that exposes the same MCP tools as the official Tavily MCP server. When a tool is called, it picks the next API key from a round-robin rotation, skipping any key that has used up its monthly budget. If Tavily returns a 429 (rate limit), the key is marked as exhausted and the request is retried with the next key.
 
-Credit usage is tracked in a SQLite database. Every response includes the remaining credit budget so you can see consumption in real time.
+Credit usage and attributed request events are tracked in SQLite. Every response includes the remaining credit budget so you can see consumption in real time.
 
 ```
 Client (Claude Code, etc.)
@@ -46,14 +46,21 @@ Create one or more free accounts at [tavily.com](https://tavily.com). Each gives
 git clone https://github.com/lperez37/deep-research.git
 cd deep-research
 
-# Add your keys (comma-separated)
-echo 'TAVILY_API_KEYS=tvly-key1,tvly-key2' > .env
+# Add your keys and generate a bearer token. Save the printed token for clients.
+AUTH_TOKEN="$(openssl rand -hex 32)"
+printf 'TAVILY_API_KEYS=tvly-key1,tvly-key2\nAUTH_TOKEN=%s\n' "$AUTH_TOKEN" > .env
+printf 'Bearer token: %s\n' "$AUTH_TOKEN"
 
 # Start the server
 docker compose up -d
 ```
 
 The MCP endpoint is now at `http://your-host:8087/mcp`.
+
+Use plain HTTP only across an encrypted private network such as Tailscale. Put
+the service behind an HTTPS reverse proxy before exposing it to the public
+internet; bearer tokens and search contents must not cross an untrusted network
+in plaintext.
 
 ### 3. Connect from Claude Code
 
@@ -66,7 +73,9 @@ claude mcp remove tavily -s user
 Add deep-research (naming it `tavily` keeps your existing permissions working):
 
 ```bash
-claude mcp add tavily -s user -t http http://your-host:8087/mcp
+claude mcp add tavily -s user -t http \
+  -H "Authorization: Bearer YOUR_SAVED_AUTH_TOKEN" \
+  http://your-host:8087/mcp
 ```
 
 Verify:
@@ -83,7 +92,10 @@ claude mcp list
   "mcpServers": {
     "tavily": {
       "type": "http",
-      "url": "http://your-host:8087/mcp"
+      "url": "http://your-host:8087/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_SAVED_AUTH_TOKEN"
+      }
     }
   }
 }
@@ -103,7 +115,9 @@ Every response includes a `_credits_remaining` field like `"1942/2000 credits re
 
 ## Configuration
 
-All settings are environment variables. Only `TAVILY_API_KEYS` is required.
+All settings are environment variables. `TAVILY_API_KEYS` is always required.
+`AUTH_TOKEN` is also required for HTTP and SSE unless the explicit development
+override is enabled.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -113,15 +127,86 @@ All settings are environment variables. Only `TAVILY_API_KEYS` is required.
 | `TRANSPORT` | `stdio` | `stdio`, `http`, or `sse` |
 | `HOST` | `0.0.0.0` | Listen address |
 | `PORT` | `8000` | Listen port |
-| `AUTH_TOKEN` | empty | Optional bearer token for HTTP auth |
+| `AUTH_TOKEN` | empty | Required bearer token for HTTP and SSE |
+| `ALLOW_UNAUTHENTICATED_HTTP` | `false` | Explicit development-only network auth override |
+| `TRUST_PROXY_HEADERS` | `false` | Trust the first `X-Forwarded-For` address for audit attribution. Enable only behind a trusted proxy |
+| `AUDIT_MAX_TEXT_CHARS` | `8192` | Maximum persisted query or instruction length |
+| `AUDIT_RETENTION_DAYS` | `90` | Automatic completed-row retention |
+| `AUDIT_BUSY_TIMEOUT_SECONDS` | `0.1` | Maximum SQLite lock wait for request audit writes |
+
+## Request audit log
+
+The gateway attempts to write every Tavily tool call to the `request_log` table
+in the same SQLite database as credit usage. Logging starts before the upstream
+request so failures and server-side cancellations remain visible. The completion
+update records status, credits, retry count and duration. Audit writes are deliberately
+best-effort: a logging failure is emitted to the server log but does not make web
+search unavailable.
+
+The log contains:
+
+- UTC timestamps, MCP request ID, session ID and transport
+- endpoint, bounded search/extract query or crawl/map instructions and sanitised URL target
+- requester ID, hostname, application and application version
+- source IP and user agent for HTTP requests
+- success, failure, cancellation or abandoned status, Tavily credits, attempts, duration and a bounded error code
+
+An HTTP client disconnect does not necessarily cancel work already accepted by
+FastMCP. If Tavily completes after a disconnect, the row records the upstream
+outcome rather than claiming that the server coroutine was cancelled.
+
+MCP client name and version are used as the application fallback. HTTP clients
+can supply more useful attribution with these headers:
+
+```text
+X-Requester-ID: research-team
+X-Requester-Hostname: agent-host-3
+X-Requester-Application: Hermes
+X-Requester-Application-Version: 1.0
+```
+
+These headers are self-declared labels, not authenticated identity claims. Raw
+headers and credentials are never stored. `X-Forwarded-For` is ignored unless
+`TRUST_PROXY_HEADERS=true` because it is otherwise spoofable. For stdio, the
+local hostname and MCP client information are recorded automatically.
+
+Stored URL targets retain scheme, host and port plus a non-reversible path
+fingerprint. User information, path content, query strings and fragments are
+removed. Malformed targets are recorded as `[invalid URL]`. Queries and
+instructions are capped at `AUDIT_MAX_TEXT_CHARS` characters. Truncated values
+include a SHA-256 fingerprint of the complete input. The SQLite database and
+live WAL sidecars are restricted to owner access (`0600`).
+
+Queries and source IP addresses can contain personal or confidential data. The
+audit log is therefore not exposed as an MCP tool. Inspect it only through
+controlled database access and apply retention appropriate to your environment:
+
+```bash
+# Inspect the named Compose volume through the shipped Python runtime.
+docker compose exec deep-research /app/.venv/bin/python -c \
+  "import json,sqlite3; c=sqlite3.connect('/data/credits.db'); print(json.dumps(c.execute('SELECT created_at, application, hostname, endpoint, query, status FROM request_log ORDER BY id DESC LIMIT 20').fetchall(), indent=2))"
+
+# Example 90-day policy. Run VACUUM separately if space must be reclaimed.
+docker compose exec deep-research /app/.venv/bin/python -c \
+  "import sqlite3; c=sqlite3.connect('/data/credits.db'); n=c.execute(\"DELETE FROM request_log WHERE julianday(created_at) < julianday('now', '-90 days')\").rowcount; c.commit(); print(f'deleted {n} rows')"
+```
+
+Completed rows older than `AUDIT_RETENTION_DAYS` are deleted on startup and by
+daily maintenance while the service remains running, with a default retention
+of 90 days. Rows left in `started` for more than 24 hours are classified as
+`abandoned` before retention is applied.
 
 ## Authentication
 
-By default, no auth is required. To protect the endpoint, set `AUTH_TOKEN` in `.env`:
+HTTP and SSE transports require `AUTH_TOKEN` by default. Stdio remains
+unauthenticated because it is a local process transport. Set the token in `.env`:
 
 ```
 AUTH_TOKEN=my-secret-token
 ```
+
+An isolated development deployment can explicitly opt out with
+`ALLOW_UNAUTHENTICATED_HTTP=true`. Do not use that override on a published port.
 
 Then connect with:
 
@@ -135,7 +220,7 @@ claude mcp add tavily -s user -t http \
 
 ```bash
 pip install -e ".[dev]"
-pytest                    # 63 tests, all passing
+pytest
 ```
 
 ## License

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import computed_field
+from pydantic import computed_field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -40,6 +40,19 @@ class Settings(BaseSettings):
     # When empty/unset, no auth is required.
     auth_token: str = ""
 
+    # HTTP is closed by default unless authentication is configured. Set this
+    # only for a deliberately isolated development deployment.
+    allow_unauthenticated_http: bool = False
+
+    # Trust X-Forwarded-For when recording requester source IP. Keep disabled
+    # unless the service is reachable only through a trusted reverse proxy.
+    trust_proxy_headers: bool = False
+
+    # Bound sensitive audit data and prune it automatically.
+    audit_max_text_chars: int = 8192
+    audit_retention_days: int = 90
+    audit_busy_timeout_seconds: float = 0.1
+
     model_config = {
         "env_prefix": "",
         "env_nested_delimiter": "__",
@@ -50,3 +63,23 @@ class Settings(BaseSettings):
     def api_keys(self) -> list[str]:
         """Parse comma-separated keys into a list."""
         return [k.strip() for k in self.tavily_api_keys.split(",") if k.strip()]
+
+    @model_validator(mode="after")
+    def require_http_auth(self) -> Settings:
+        """Refuse an accidentally open network transport."""
+        if (
+            self.transport in {"http", "sse", "streamable-http"}
+            and not self.auth_token
+            and not self.allow_unauthenticated_http
+        ):
+            raise ValueError(
+                "AUTH_TOKEN is required for HTTP/SSE transport; set "
+                "ALLOW_UNAUTHENTICATED_HTTP=true only for an isolated deployment"
+            )
+        if self.audit_max_text_chars < 256:
+            raise ValueError("AUDIT_MAX_TEXT_CHARS must be at least 256")
+        if self.audit_retention_days < 1:
+            raise ValueError("AUDIT_RETENTION_DAYS must be at least 1")
+        if not 0 <= self.audit_busy_timeout_seconds <= 1:
+            raise ValueError("AUDIT_BUSY_TIMEOUT_SECONDS must be between 0 and 1")
+        return self

@@ -1,38 +1,86 @@
-"""SQLite-backed credit tracker with automatic monthly reset."""
+"""SQLite-backed credit tracker with automatic monthly reset and request audit log."""
 
 from __future__ import annotations
 
 import math
+import os
 import sqlite3
-from datetime import datetime, timezone
+import threading
+import time
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
+
+_REQUEST_LOG_MAINTENANCE_INTERVAL_SECONDS = 24 * 60 * 60
 
 
 def _current_period() -> str:
     """Return current billing period as 'YYYY-MM'."""
-    return datetime.now(timezone.utc).strftime("%Y-%m")
+    return datetime.now(UTC).strftime("%Y-%m")
+
+
+def _utc_now() -> str:
+    """Return an unambiguous UTC timestamp for SQLite text storage."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
+def _locked(method):
+    """Serialise access to the shared SQLite connection."""
+
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 class CreditTracker:
-    """Tracks per-key credit usage and rate-limit cooldowns in SQLite.
+    """Tracks credit usage, cooldowns and requester audit events in SQLite.
 
-    Two tables:
+    Three tables:
       - ``usage`` records monthly credit consumption per key.
-      - ``cooldown`` records a per-key unix timestamp before which the key
-        should be skipped (set after Tavily 429s the key, independent of
-        local usage counters).
+      - ``cooldown`` records per-key 429 cooldown expiry timestamps.
+      - ``request_log`` records attributed Tavily request lifecycle events.
 
-    Thread-safe via SQLite's built-in locking.  Each mutation is a single
-    atomic statement so concurrent asyncio tasks are safe when wrapped
-    with ``asyncio.Lock`` at the router level.
+    Schema creation is additive and idempotent so existing ``credits.db`` files
+    are upgraded automatically. A re-entrant in-process lock serialises access to
+    the shared connection and mutations are committed atomically. SQLite WAL
+    mode provides coordination with other processes.
     """
 
-    def __init__(self, db_path: str = ":memory:") -> None:
+    def __init__(
+        self,
+        db_path: str = ":memory:",
+        *,
+        busy_timeout_seconds: float = 30.0,
+        request_log_retention_days: int = 90,
+    ) -> None:
+        if busy_timeout_seconds < 0:
+            raise ValueError("busy_timeout_seconds cannot be negative")
+        if request_log_retention_days < 0:
+            raise ValueError("request_log_retention_days cannot be negative")
+        self._lock = threading.RLock()
         path = Path(db_path)
         if db_path != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(path), check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
+            try:
+                descriptor = os.open(
+                    path, os.O_CREAT | os.O_EXCL | os.O_RDWR, mode=0o600
+                )
+            except FileExistsError:
+                path.chmod(0o600)
+            else:
+                os.close(descriptor)
+        self._conn = sqlite3.connect(
+            str(path),
+            check_same_thread=False,
+            timeout=busy_timeout_seconds,
+        )
+        busy_timeout_ms = round(busy_timeout_seconds * 1000)
+        self._conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+        self._enable_wal()
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS usage (
@@ -51,10 +99,76 @@ class CreditTracker:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS request_log (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at           TEXT    NOT NULL,
+                completed_at         TEXT,
+                endpoint             TEXT    NOT NULL,
+                query                TEXT,
+                target               TEXT,
+                request_id           TEXT,
+                session_id           TEXT,
+                requester_id         TEXT,
+                hostname             TEXT,
+                application          TEXT,
+                application_version  TEXT,
+                source_ip            TEXT,
+                user_agent           TEXT,
+                transport            TEXT,
+                status               TEXT    NOT NULL DEFAULT 'started',
+                credits              INTEGER,
+                attempts             INTEGER NOT NULL DEFAULT 0,
+                duration_ms          INTEGER,
+                error_code           TEXT
+            )
+            """
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_request_log_created_at "
+            "ON request_log(created_at)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_request_log_application "
+            "ON request_log(application, created_at)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_request_log_hostname "
+            "ON request_log(hostname, created_at)"
+        )
         self._conn.commit()
+        self._request_log_retention_days = request_log_retention_days
+        self.reconcile_abandoned_requests()
+        if request_log_retention_days:
+            self.prune_request_log(request_log_retention_days)
+        self._next_request_log_maintenance = (
+            time.monotonic() + _REQUEST_LOG_MAINTENANCE_INTERVAL_SECONDS
+        )
+        if db_path != ":memory:":
+            self._secure_database_files(path)
+
+    @staticmethod
+    def _secure_database_files(path: Path) -> None:
+        """Restrict the database and any live WAL sidecars to the owner."""
+        for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+            if candidate.exists():
+                candidate.chmod(0o600)
+
+    def _enable_wal(self) -> None:
+        """Enable WAL with bounded retries for simultaneous process startup."""
+        for attempt in range(8):
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or attempt == 7:
+                    raise
+                time.sleep(0.05 * 2**attempt)
 
     # ── queries ────────────────────────────────────────────────
 
+    @_locked
     def get_usage(self, key: str) -> int:
         """Return credits used by *key* in the current billing period."""
         row = self._conn.execute(
@@ -63,6 +177,7 @@ class CreditTracker:
         ).fetchone()
         return row[0] if row else 0
 
+    @_locked
     def get_all_usage(self) -> dict[str, int]:
         """Return ``{key: used}`` for every key in the current period."""
         rows = self._conn.execute(
@@ -71,6 +186,7 @@ class CreditTracker:
         ).fetchall()
         return {k: u for k, u in rows}
 
+    @_locked
     def get_cooldown(self, key: str) -> int:
         """Return the unix timestamp until which *key* is in cooldown.
 
@@ -83,8 +199,24 @@ class CreditTracker:
         ).fetchone()
         return row[0] if row else 0
 
+    @_locked
+    def get_recent_requests(self, limit: int = 100) -> list[dict[str, object]]:
+        """Return recent audit rows for diagnostics and tests.
+
+        This is deliberately not an MCP tool because queries may contain
+        sensitive business information.
+        """
+        bounded_limit = max(1, min(limit, 1000))
+        cursor = self._conn.execute(
+            "SELECT * FROM request_log ORDER BY id DESC LIMIT ?",
+            (bounded_limit,),
+        )
+        columns = [description[0] for description in cursor.description]
+        return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
     # ── mutations ──────────────────────────────────────────────
 
+    @_locked
     def add_usage(self, key: str, credits: int) -> None:
         """Atomically add *credits* to *key* for the current period."""
         self._conn.execute(
@@ -98,11 +230,11 @@ class CreditTracker:
         )
         self._conn.commit()
 
+    @_locked
     def set_cooldown(self, key: str, until_ts: int) -> None:
         """Set the cooldown expiry timestamp for *key*.
 
-        ``until_ts`` is a unix timestamp (seconds since epoch). Overwrites
-        any existing cooldown for the key.
+        ``until_ts`` is a unix timestamp. Any existing cooldown is replaced.
         """
         self._conn.execute(
             """
@@ -115,6 +247,127 @@ class CreditTracker:
         )
         self._conn.commit()
 
+    @_locked
+    def start_request(
+        self,
+        *,
+        endpoint: str,
+        query: str | None,
+        target: str | None,
+        requester: Mapping[str, str | None],
+    ) -> int:
+        """Create an audit row before forwarding a request to Tavily."""
+        self._maintain_request_log()
+        cursor = self._conn.execute(
+            """
+            INSERT INTO request_log (
+                created_at, endpoint, query, target, request_id, session_id,
+                requester_id, hostname, application, application_version,
+                source_ip, user_agent, transport
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _utc_now(),
+                endpoint,
+                query,
+                target,
+                requester.get("request_id"),
+                requester.get("session_id"),
+                requester.get("requester_id"),
+                requester.get("hostname"),
+                requester.get("application"),
+                requester.get("application_version"),
+                requester.get("source_ip"),
+                requester.get("user_agent"),
+                requester.get("transport"),
+            ),
+        )
+        self._conn.commit()
+        if cursor.lastrowid is None:  # pragma: no cover - SQLite always supplies it
+            raise RuntimeError("SQLite did not return a request log row ID")
+        return cursor.lastrowid
+
+    def _maintain_request_log(self) -> None:
+        """Periodically reconcile and prune audit rows during long uptimes."""
+        now = time.monotonic()
+        if now < self._next_request_log_maintenance:
+            return
+        self.reconcile_abandoned_requests()
+        if self._request_log_retention_days:
+            self.prune_request_log(self._request_log_retention_days)
+        self._next_request_log_maintenance = (
+            now + _REQUEST_LOG_MAINTENANCE_INTERVAL_SECONDS
+        )
+
+    @_locked
+    def finish_request(
+        self,
+        request_log_id: int,
+        *,
+        status: str,
+        attempts: int,
+        duration_ms: int,
+        credits: int | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        """Complete an audit row with outcome data."""
+        if status not in {"succeeded", "failed", "cancelled", "abandoned"}:
+            raise ValueError(
+                "status must be 'succeeded', 'failed', 'cancelled' or 'abandoned'"
+            )
+        self._conn.execute(
+            """
+            UPDATE request_log
+            SET completed_at = ?, status = ?, credits = ?, attempts = ?,
+                duration_ms = ?, error_code = ?
+            WHERE id = ?
+            """,
+            (
+                _utc_now(),
+                status,
+                credits,
+                attempts,
+                duration_ms,
+                error_code,
+                request_log_id,
+            ),
+        )
+        self._conn.commit()
+
+    @_locked
+    def reconcile_abandoned_requests(self, older_than_hours: int = 24) -> int:
+        """Mark stale started rows abandoned after an abrupt process exit."""
+        if older_than_hours < 1:
+            raise ValueError("older_than_hours must be at least 1")
+        cursor = self._conn.execute(
+            """
+            UPDATE request_log
+            SET completed_at = ?, status = 'abandoned', error_code = 'process_restart'
+            WHERE status = 'started'
+              AND julianday(created_at) < julianday('now', ?)
+            """,
+            (_utc_now(), f"-{older_than_hours} hours"),
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
+    @_locked
+    def prune_request_log(self, retention_days: int) -> int:
+        """Delete completed audit rows older than the configured retention."""
+        if retention_days < 1:
+            raise ValueError("retention_days must be at least 1")
+        cursor = self._conn.execute(
+            """
+            DELETE FROM request_log
+            WHERE status != 'started'
+              AND julianday(created_at) < julianday('now', ?)
+            """,
+            (f"-{retention_days} days",),
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
+    @_locked
     def close(self) -> None:
         self._conn.close()
 
@@ -125,9 +378,8 @@ class CreditTracker:
 def estimate_credits(endpoint: str, params: dict) -> int:
     """Estimate the credit cost of a Tavily API request.
 
-    Used for routing decisions *before* sending the request.
-    After the request completes, the actual ``usage.credits`` value
-    from the response takes precedence.
+    This is used for routing before the request. The actual ``usage.credits``
+    value from a successful response takes precedence.
     """
     match endpoint:
         case "search":

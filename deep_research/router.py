@@ -50,17 +50,19 @@ class KeyRouter:
             for _ in range(len(self._keys)):
                 key = self._keys[self._index]
                 self._index = (self._index + 1) % len(self._keys)
-                used = self._tracker.get_usage(key)
-                cooldown_until = self._tracker.get_cooldown(key)
+                used, cooldown_until = await asyncio.to_thread(
+                    lambda key=key: (
+                        self._tracker.get_usage(key),
+                        self._tracker.get_cooldown(key),
+                    )
+                )
                 if used < self._credits_per_key and cooldown_until <= now:
                     return key
-            raise RuntimeError(
-                "All API keys are exhausted or in cooldown"
-            )
+            raise RuntimeError("All API keys are exhausted or in cooldown")
 
     async def report_usage(self, key: str, credits: int) -> None:
         """Record credit consumption for a key."""
-        self._tracker.add_usage(key, credits)
+        await asyncio.to_thread(self._tracker.add_usage, key, credits)
 
     async def mark_rate_limited(self, key: str) -> None:
         """Mark *key* as cooled-down after a Tavily 429.
@@ -71,7 +73,11 @@ class KeyRouter:
         called again and cooldown re-extends.
         """
         until_ts = int(time.time()) + self._cooldown_seconds
-        self._tracker.set_cooldown(key, until_ts)
+        await asyncio.to_thread(self._tracker.set_cooldown, key, until_ts)
+
+    async def get_status_async(self) -> list[dict]:
+        """Return status without blocking the event loop on SQLite."""
+        return await asyncio.to_thread(self.get_status)
 
     def get_status(self) -> list[dict]:
         """Return credit + cooldown status for every key (for the status tool)."""
@@ -80,16 +86,22 @@ class KeyRouter:
         for k in self._keys:
             used = self._tracker.get_usage(k)
             remaining = max(0, self._credits_per_key - used)
-            utilization = round(used / self._credits_per_key * 100, 1) if self._credits_per_key > 0 else 0
+            utilization = (
+                round(used / self._credits_per_key * 100, 1)
+                if self._credits_per_key > 0
+                else 0
+            )
             cooldown_until = self._tracker.get_cooldown(k)
             in_cooldown = cooldown_until > now
-            result.append({
-                "key": f"{k[:8]}...{k[-4:]}",
-                "used": used,
-                "limit": self._credits_per_key,
-                "remaining": remaining,
-                "utilization_pct": utilization,
-                "in_cooldown": in_cooldown,
-                "cooldown_until": cooldown_until if in_cooldown else 0,
-            })
+            result.append(
+                {
+                    "key": f"{k[:8]}...{k[-4:]}",
+                    "used": used,
+                    "limit": self._credits_per_key,
+                    "remaining": remaining,
+                    "utilization_pct": utilization,
+                    "in_cooldown": in_cooldown,
+                    "cooldown_until": cooldown_until if in_cooldown else 0,
+                }
+            )
         return result

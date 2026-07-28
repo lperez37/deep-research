@@ -21,6 +21,7 @@ from deep_research.auth import ConfiguredTokenVerifier
 from deep_research.burst import SessionBurstLimiter
 from deep_research.config import Settings
 from deep_research.credits import CreditTracker, estimate_credits
+from deep_research.fallback import SearchFallback
 from deep_research.router import KeyRouter
 from deep_research.tavily_client import TavilyAPIError, TavilyClient
 
@@ -56,6 +57,24 @@ burst_limiter = SessionBurstLimiter(
 )
 
 auth = ConfiguredTokenVerifier(settings.auth_token) if settings.auth_token else None
+fallback = SearchFallback(
+    dataforseo_auth=settings.dataforseo_auth,
+    dataforseo_base_url=settings.dataforseo_base_url,
+    location_name=settings.dataforseo_location_name,
+    llm_api_key=settings.fallback_llm_api_key,
+    llm_base_url=settings.fallback_llm_base_url,
+    llm_model=settings.fallback_llm_model,
+    llm_input_cost_per_million=settings.fallback_llm_input_cost_per_million,
+    llm_output_cost_per_million=settings.fallback_llm_output_cost_per_million,
+    jina_base_url=settings.jina_scraper_base_url,
+    content_max_chars=settings.fallback_content_max_chars,
+    tracker=tracker,
+    daily_cost_limit_usd=settings.fallback_daily_cost_limit_usd,
+    max_concurrency=settings.fallback_max_concurrency,
+    max_cost_per_search_usd=settings.fallback_max_cost_per_search_usd,
+    jina_max_response_bytes=settings.jina_max_response_bytes,
+) if settings.fallback_enabled else None
+
 mcp = FastMCP(name="deep-research", auth=auth)
 
 
@@ -78,13 +97,11 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
     try:
         audit_id = await asyncio.shield(audit_start)
         burst_limiter.check(_context_session_id(ctx))
-        for attempt in range(_MAX_RETRIES):
+        for _attempt in range(max(_MAX_RETRIES, router.key_count)):
             try:
                 key = await router.get_key()
             except RuntimeError:
-                if last_rate_limit_error is not None:
-                    raise last_rate_limit_error
-                raise
+                break
             attempts += 1
             try:
                 result = await client.request(endpoint, key, params)
@@ -111,8 +128,7 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
                     )
                     await router.mark_rate_limited(key)
                     last_rate_limit_error = exc
-                    if attempt < _MAX_RETRIES - 1:
-                        continue
+                    continue
                 raise
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 429:
@@ -124,11 +140,24 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
                     )
                     await router.mark_rate_limited(key)
                     last_rate_limit_error = exc
-                    if attempt < _MAX_RETRIES - 1:
-                        continue
+                    continue
                 raise
 
-        raise RuntimeError("All retry attempts exhausted")
+        if endpoint == "search" and settings.fallback_enabled:
+            result = await _run_fallback(params)
+            credits_used = 0
+            result["_credits_remaining"] = await _credits_summary()
+            await _finish_audit(
+                audit_id,
+                status="succeeded",
+                credits=0,
+                attempts=attempts,
+                started=started,
+            )
+            return result
+        if last_rate_limit_error is not None:
+            raise last_rate_limit_error
+        raise RuntimeError("All API keys are exhausted or in cooldown")
     except asyncio.CancelledError:
         cleanup = asyncio.create_task(
             _finalize_cancelled_audit(
@@ -158,6 +187,15 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
             error_code=_error_code(exc),
         )
         raise
+
+
+async def _run_fallback(params: dict) -> dict:
+    """Run the configured search fallback after Tavily becomes unavailable."""
+    if fallback is None:
+        raise RuntimeError("Search fallback is not initialized")
+    reason = "All Tavily API keys are exhausted or in cooldown"
+    logger.warning("%s; activating search fallback", reason)
+    return await fallback.search(params["query"], params, reason)
 
 
 # ── tools (Tavily MCP interface, minus research) ───────────────
@@ -560,6 +598,9 @@ async def credit_status() -> dict:
         "total_remaining": total_remaining,
         "total_limit": total_limit,
         "total_utilization_pct": total_utilization,
+        "fallback_enabled": settings.fallback_enabled,
+        "fallback_spend_today_usd": tracker.get_fallback_spend(),
+        "fallback_daily_limit_usd": settings.fallback_daily_cost_limit_usd,
     }
 
 
@@ -781,6 +822,7 @@ def main() -> None:
         router.key_count,
         settings.transport,
     )
+    logger.info("Search fallback is %s", "ENABLED" if settings.fallback_enabled else "disabled")
     if settings.auth_token:
         logger.info("Bearer token auth is ENABLED")
     elif settings.allow_unauthenticated_http:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-
 from pydantic import computed_field, model_validator
 from pydantic_settings import BaseSettings
 
@@ -60,6 +59,23 @@ class Settings(BaseSettings):
     session_burst_limit: int = 5
     session_burst_window_seconds: float = 60.0
 
+    # Optional search fallback used only when every Tavily key is unavailable.
+    fallback_enabled: bool = False
+    dataforseo_auth: str = ""
+    dataforseo_base_url: str = "https://api.dataforseo.com/v3"
+    dataforseo_location_name: str = "Amsterdam,North Holland,Netherlands"
+    fallback_llm_base_url: str = "https://router.vivacityholding.com/v1"
+    fallback_llm_api_key: str = ""
+    fallback_llm_model: str = "deepseek-v4-flash"
+    fallback_llm_input_cost_per_million: float = 0.14
+    fallback_llm_output_cost_per_million: float = 0.28
+    jina_scraper_base_url: str = "http://100.119.183.110:9567"
+    fallback_content_max_chars: int = 50_000
+    fallback_daily_cost_limit_usd: float = 1.0
+    fallback_max_concurrency: int = 2
+    fallback_max_cost_per_search_usd: float = 0.02
+    jina_max_response_bytes: int = 1_100_000
+
     model_config = {
         "env_prefix": "",
         "env_nested_delimiter": "__",
@@ -72,8 +88,8 @@ class Settings(BaseSettings):
         return [k.strip() for k in self.tavily_api_keys.split(",") if k.strip()]
 
     @model_validator(mode="after")
-    def require_http_auth(self) -> Settings:
-        """Refuse an accidentally open network transport."""
+    def validate_settings(self) -> Settings:
+        """Validate network, audit, burst, and fallback settings."""
         if (
             self.transport in {"http", "sse", "streamable-http"}
             and not self.auth_token
@@ -96,4 +112,18 @@ class Settings(BaseSettings):
             or self.session_burst_window_seconds <= 0
         ):
             raise ValueError("SESSION_BURST_WINDOW_SECONDS must be greater than 0")
+        if self.fallback_enabled:
+            missing = [
+                name
+                for name, value in (
+                    ("DATAFORSEO_AUTH", self.dataforseo_auth),
+                    ("FALLBACK_LLM_API_KEY", self.fallback_llm_api_key),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    "Fallback is enabled but required settings are missing: "
+                    + ", ".join(missing)
+                )
         return self

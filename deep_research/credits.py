@@ -36,6 +36,11 @@ def _locked(method):
     return wrapper
 
 
+def _current_day() -> str:
+    """Return the current UTC day as ``YYYY-MM-DD``."""
+    return datetime.now(UTC).strftime("%Y-%m-%d")
+
+
 class CreditTracker:
     """Tracks credit usage, cooldowns and requester audit events in SQLite.
 
@@ -136,6 +141,14 @@ class CreditTracker:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_request_log_hostname "
             "ON request_log(hostname, created_at)"
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fallback_spend (
+                day        TEXT    PRIMARY KEY,
+                microusd   INTEGER NOT NULL DEFAULT 0
+            )
+            """
         )
         self._conn.commit()
         self._request_log_retention_days = request_log_retention_days
@@ -366,6 +379,61 @@ class CreditTracker:
         )
         self._conn.commit()
         return cursor.rowcount
+
+    @_locked
+    def reserve_fallback_cost(
+        self, amount_usd: float, daily_limit_usd: float
+    ) -> str | None:
+        """Atomically reserve budget and return its UTC day, or ``None``."""
+        amount = math.ceil(amount_usd * 1_000_000)
+        limit = math.floor(daily_limit_usd * 1_000_000)
+        day = _current_day()
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            row = self._conn.execute(
+                "SELECT microusd FROM fallback_spend WHERE day = ?",
+                (day,),
+            ).fetchone()
+            used = row[0] if row else 0
+            if used + amount > limit:
+                self._conn.rollback()
+                return None
+            self._conn.execute(
+                """
+                INSERT INTO fallback_spend (day, microusd) VALUES (?, ?)
+                ON CONFLICT(day) DO UPDATE SET microusd = microusd + excluded.microusd
+                """,
+                (day, amount),
+            )
+            self._conn.commit()
+            return day
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def settle_fallback_cost(
+        self, reservation_day: str, reserved_usd: float, actual_usd: float
+    ) -> None:
+        """Replace a reservation with the provider-reported actual cost."""
+        reserved = math.ceil(reserved_usd * 1_000_000)
+        actual = math.ceil(actual_usd * 1_000_000)
+        self._conn.execute(
+            """
+            UPDATE fallback_spend
+            SET microusd = MAX(0, microusd - ? + ?)
+            WHERE day = ?
+            """,
+            (reserved, actual, reservation_day),
+        )
+        self._conn.commit()
+
+    def get_fallback_spend(self) -> float:
+        """Return today's reserved and settled fallback spend in USD."""
+        row = self._conn.execute(
+            "SELECT microusd FROM fallback_spend WHERE day = ?",
+            (_current_day(),),
+        ).fetchone()
+        return (row[0] if row else 0) / 1_000_000
 
     @_locked
     def close(self) -> None:

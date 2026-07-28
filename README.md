@@ -20,6 +20,13 @@ deep-research is a [FastMCP](https://github.com/jlowin/fastmcp) server that expo
 
 Credit usage and attributed request events are tracked in SQLite. Every response includes the remaining credit budget so you can see consumption in real time.
 
+An optional search-only fallback can keep search available after every Tavily
+key is exhausted or cooling down. It collects 10 Amsterdam-localized Google
+organic results through DataForSEO, uses a fast LLM to select up to 3 genuinely
+relevant sources, and fetches those pages concurrently as Markdown through a
+Jina Reader proxy. Fallback responses identify themselves and include a cost
+breakdown.
+
 ```
 Client (Claude Code, etc.)
     |
@@ -135,6 +142,19 @@ override is enabled.
 | `AUDIT_BUSY_TIMEOUT_SECONDS` | `0.1` | Maximum SQLite lock wait for request audit writes |
 | `SESSION_BURST_LIMIT` | `5` | Metered calls allowed per MCP session window (`0` disables) |
 | `SESSION_BURST_WINDOW_SECONDS` | `60` | Rolling session burst window in seconds |
+| `FALLBACK_ENABLED` | `false` | Enable the search-only exhaustion fallback |
+| `DATAFORSEO_AUTH` | empty | Base64 DataForSEO `login:password` value |
+| `DATAFORSEO_LOCATION_NAME` | `Amsterdam,North Holland,Netherlands` | Google SERP location |
+| `FALLBACK_LLM_BASE_URL` | `https://router.vivacityholding.com/v1` | OpenAI-compatible selector URL |
+| `FALLBACK_LLM_API_KEY` | empty | Source-selection API key |
+| `FALLBACK_LLM_MODEL` | `deepseek-v4-flash` | Relevance-selection model |
+| `JINA_SCRAPER_BASE_URL` | `http://100.119.183.110:9567` | Jina Reader proxy URL |
+| `FALLBACK_CONTENT_MAX_CHARS` | `50000` | Maximum Markdown characters per source |
+| `FALLBACK_DAILY_COST_LIMIT_USD` | `1.00` | Durable UTC daily fallback spending ceiling |
+| `FALLBACK_MAX_CONCURRENCY` | `2` | Maximum simultaneous fallback pipelines |
+| `FALLBACK_MAX_COST_PER_SEARCH_USD` | `0.02` | Reserved upper cost bound per search |
+| `JINA_MAX_RESPONSE_BYTES` | `1100000` | Hard router-side Jina response byte limit |
+| `BIND_HOST` | `127.0.0.1` | Docker-published host address; use a Tailnet IP remotely |
 
 ## Request audit log
 

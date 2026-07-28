@@ -13,7 +13,7 @@ COPY pyproject.toml ./
 
 RUN uv venv /app/.venv \
     && uv pip install --no-cache-dir --python /app/.venv/bin/python \
-       "fastmcp>=3.4.5,<4" "httpx>=0.27" "pydantic-settings>=2.0" "aiosqlite>=0.20"
+       "fastmcp==3.4.5" "httpx>=0.27" "pydantic-settings>=2.0" "aiosqlite>=0.20"
 
 # ── Runtime stage ─────────────────────────────────────────────
 FROM python:3.12-slim

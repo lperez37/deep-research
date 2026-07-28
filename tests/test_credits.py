@@ -353,6 +353,15 @@ class TestRequestAuditLog:
 
         rows = tracker.get_recent_requests()
         assert [row["id"] for row in rows] == [current_id]
+class TestFallbackSpend:
+    def test_reserve_settle_and_limit(self) -> None:
+        tracker = CreditTracker(":memory:")
+        day = tracker.reserve_fallback_cost(0.01, 0.02)
+        assert day is not None
+        assert tracker.get_fallback_spend() == 0.01
+        tracker.settle_fallback_cost(day, 0.01, 0.0042)
+        assert tracker.get_fallback_spend() == 0.0042
+        assert tracker.reserve_fallback_cost(0.01, 0.01) is None
 
 
 # ── estimate_credits ─────────────────────────────────────────────────────

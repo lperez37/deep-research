@@ -6,7 +6,7 @@ services:
       TRANSPORT: http
       PORT: "8087"
     ports:
-      - "8087:8087"
+      - "${BIND_HOST:-127.0.0.1}:8087:8087"
     volumes:
       - credit-data:/data
     restart: unless-stopped

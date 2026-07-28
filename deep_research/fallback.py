@@ -46,6 +46,7 @@ class SearchFallback:
         llm_output_cost_per_million: float,
         jina_base_url: str,
         content_max_chars: int,
+        search_content_max_chars: int,
         tracker: CreditTracker,
         daily_cost_limit_usd: float,
         max_concurrency: int,
@@ -59,6 +60,7 @@ class SearchFallback:
         self._llm_input_cost_per_million = llm_input_cost_per_million
         self._llm_output_cost_per_million = llm_output_cost_per_million
         self._content_max_chars = content_max_chars
+        self._search_content_max_chars = search_content_max_chars
         self._tracker = tracker
         self._daily_cost_limit_usd = daily_cost_limit_usd
         self._semaphore = asyncio.Semaphore(max_concurrency)
@@ -150,6 +152,8 @@ class SearchFallback:
                 "sources_returned": len(results),
                 "scrape_failures": failures,
                 "location": self._location_name,
+                "content_limit_chars": self._search_content_max_chars,
+                "raw_content_limit_chars": self._content_max_chars,
                 "daily_spend_usd": round(self._tracker.get_fallback_spend(), 6),
                 "daily_limit_usd": self._daily_cost_limit_usd,
                 "cost_usd": {
@@ -208,6 +212,7 @@ class SearchFallback:
                 "urls_returned": len(results),
                 "urls_failed": len(failed_results),
                 "query_reranking_applied": False,
+                "content_limit_chars": self._content_max_chars,
                 "cost_usd": {"jina_scraping": 0.0, "total": 0.0},
             },
         }
@@ -402,7 +407,7 @@ class SearchFallback:
         markdown = body.get("markdown")
         if not isinstance(markdown, str) or not markdown.strip():
             raise RuntimeError(f"Jina returned no Markdown for {candidate.url}")
-        content = markdown[: self._content_max_chars]
+        content = markdown[: self._search_content_max_chars]
         result = {
             "title": str(body.get("title") or candidate.title)[:300],
             "url": candidate.url,
@@ -410,7 +415,7 @@ class SearchFallback:
             "score": score,
         }
         if include_raw_content:
-            result["raw_content"] = content
+            result["raw_content"] = markdown[: self._content_max_chars]
         return result
 
     async def _extract_url(self, original_url: str, safe_url: str, format: str) -> dict:

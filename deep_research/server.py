@@ -68,6 +68,7 @@ fallback = SearchFallback(
     llm_output_cost_per_million=settings.fallback_llm_output_cost_per_million,
     jina_base_url=settings.jina_scraper_base_url,
     content_max_chars=settings.fallback_content_max_chars,
+    search_content_max_chars=settings.fallback_search_content_max_chars,
     tracker=tracker,
     daily_cost_limit_usd=settings.fallback_daily_cost_limit_usd,
     max_concurrency=settings.fallback_max_concurrency,

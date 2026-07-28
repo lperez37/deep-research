@@ -149,7 +149,8 @@ override is enabled.
 | `FALLBACK_LLM_API_KEY` | empty | Source-selection API key |
 | `FALLBACK_LLM_MODEL` | `deepseek-v4-flash` | Relevance-selection model |
 | `JINA_SCRAPER_BASE_URL` | `http://100.119.183.110:9567` | Jina Reader proxy URL |
-| `FALLBACK_CONTENT_MAX_CHARS` | `50000` | Maximum Markdown characters per source |
+| `FALLBACK_CONTENT_MAX_CHARS` | `12000` | Maximum explicit raw/extract characters per source |
+| `FALLBACK_SEARCH_CONTENT_MAX_CHARS` | `3000` | Maximum normal search-result characters per source |
 | `FALLBACK_DAILY_COST_LIMIT_USD` | `1.00` | Durable UTC daily fallback spending ceiling |
 | `FALLBACK_MAX_CONCURRENCY` | `2` | Maximum simultaneous fallback pipelines |
 | `FALLBACK_MAX_COST_PER_SEARCH_USD` | `0.02` | Reserved upper cost bound per search |

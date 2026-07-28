@@ -70,7 +70,8 @@ class Settings(BaseSettings):
     fallback_llm_input_cost_per_million: float = 0.14
     fallback_llm_output_cost_per_million: float = 0.28
     jina_scraper_base_url: str = "http://100.119.183.110:9567"
-    fallback_content_max_chars: int = 50_000
+    fallback_content_max_chars: int = 12_000
+    fallback_search_content_max_chars: int = 3_000
     fallback_daily_cost_limit_usd: float = 1.0
     fallback_max_concurrency: int = 2
     fallback_max_cost_per_search_usd: float = 0.02
@@ -125,5 +126,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Fallback is enabled but required settings are missing: "
                     + ", ".join(missing)
+                )
+            if self.fallback_search_content_max_chars < 500:
+                raise ValueError(
+                    "FALLBACK_SEARCH_CONTENT_MAX_CHARS must be at least 500"
+                )
+            if self.fallback_content_max_chars < self.fallback_search_content_max_chars:
+                raise ValueError(
+                    "FALLBACK_CONTENT_MAX_CHARS cannot be smaller than the search limit"
                 )
         return self

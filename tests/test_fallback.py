@@ -26,6 +26,7 @@ async def fallback():
         llm_output_cost_per_million=0.28,
         jina_base_url="http://jina.test",
         content_max_chars=20,
+        search_content_max_chars=10,
         tracker=tracker,
         daily_cost_limit_usd=1.0,
         max_concurrency=2,
@@ -95,11 +96,13 @@ async def test_search_selects_and_scrapes_three_sources(fallback: SearchFallback
     result = await fallback.search("useful query", {}, "keys exhausted")
 
     assert [item["score"] for item in result["results"]] == [0.98, 0.91, 0.84]
-    assert all(item["content"] == "# Useful source\n\nLon" for item in result["results"])
+    assert all(item["content"] == "# Useful s" for item in result["results"])
     assert all("raw_content" not in item for item in result["results"])
     assert jina_route.call_count == 3
     assert result["_fallback"]["serp_candidates"] == 10
     assert result["_fallback"]["sources_returned"] == 3
+    assert result["_fallback"]["content_limit_chars"] == 10
+    assert result["_fallback"]["raw_content_limit_chars"] == 20
     assert result["_fallback"]["cost_usd"] == {
         "dataforseo_serp": 0.002,
         "llm_relevance_selection": 0.000084,

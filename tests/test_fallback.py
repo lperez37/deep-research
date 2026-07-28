@@ -225,3 +225,90 @@ async def test_serp_internal_error_retries_once(fallback: SearchFallback):
 
     assert route.call_count == 2
     assert result["_fallback"]["cost_usd"]["dataforseo_serp"] == 0.002
+
+
+@respx.mock
+async def test_null_llm_content_retries_with_larger_budget(
+    fallback: SearchFallback,
+):
+    respx.post(
+        "https://dataforseo.test/v3/serp/google/organic/live/advanced"
+    ).mock(return_value=httpx.Response(200, json=_serp_response()))
+    llm_route = respx.post("https://llm.test/v1/chat/completions").mock(
+        side_effect=[
+            httpx.Response(200, json={
+                "choices": [{"message": {"content": None}}],
+                "usage": {"total_tokens": 1000, "cost": 0.0001},
+            }),
+            httpx.Response(200, json={
+                "choices": [{"message": {"content": (
+                    '{"selected":[{"index":0,"score":0.9},'
+                    '{"index":1,"score":0.8},{"index":2,"score":0.7}]}'
+                )}}],
+                "usage": {"total_tokens": 500, "cost": 0.0002},
+            }),
+        ]
+    )
+    respx.post("http://jina.test/process").mock(
+        return_value=httpx.Response(200, json={"markdown": "valid"})
+    )
+
+    result = await fallback.search("query", {}, "keys exhausted")
+
+    assert llm_route.call_count == 2
+    assert len(result["results"]) == 3
+    assert result["_fallback"]["llm"]["total_tokens"] == 1500
+    assert result["_fallback"]["cost_usd"]["llm_relevance_selection"] == 0.0003
+
+
+@respx.mock
+async def test_extract_uses_jina_and_returns_partial_failures(
+    fallback: SearchFallback,
+):
+    async def jina_response(request: httpx.Request) -> httpx.Response:
+        url = json.loads(request.content)["url"]
+        if "blocked" in url:
+            return httpx.Response(502, text="blocked")
+        return httpx.Response(200, json={
+            "markdown": "# Extracted Markdown",
+            "content": "Extracted text",
+        })
+
+    route = respx.post("http://jina.test/process").mock(side_effect=jina_response)
+    urls = [
+        "https://good.example/page",
+        "https://blocked.example/page",
+        "http://127.0.0.1/private",
+    ]
+
+    result = await fallback.extract(
+        urls,
+        {"format": "markdown", "query": "ignored reranking query"},
+        "keys exhausted",
+    )
+
+    assert route.call_count == 2
+    assert result["results"] == [{
+        "url": "https://good.example/page",
+        "raw_content": "# Extracted Markdown",
+        "images": [],
+    }]
+    assert len(result["failed_results"]) == 2
+    assert result["_fallback"]["query_reranking_applied"] is False
+    assert result["_fallback"]["cost_usd"]["total"] == 0.0
+
+
+@respx.mock
+async def test_extract_text_format_uses_jina_content(fallback: SearchFallback):
+    respx.post("http://jina.test/process").mock(
+        return_value=httpx.Response(200, json={
+            "markdown": "# Markdown",
+            "content": "Plain reader content",
+        })
+    )
+
+    result = await fallback.extract(
+        ["https://example.com"], {"format": "text"}, "keys exhausted"
+    )
+
+    assert result["results"][0]["raw_content"] == "Plain reader content"

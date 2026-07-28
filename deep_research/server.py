@@ -143,8 +143,8 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
                     continue
                 raise
 
-        if endpoint == "search" and settings.fallback_enabled:
-            result = await _run_fallback(params)
+        if endpoint in {"search", "extract"} and settings.fallback_enabled:
+            result = await _run_fallback(endpoint, params)
             credits_used = 0
             result["_credits_remaining"] = await _credits_summary()
             await _finish_audit(
@@ -189,13 +189,17 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
         raise
 
 
-async def _run_fallback(params: dict) -> dict:
-    """Run the configured search fallback after Tavily becomes unavailable."""
+async def _run_fallback(endpoint: str, params: dict) -> dict:
+    """Run a configured fallback after Tavily becomes unavailable."""
     if fallback is None:
         raise RuntimeError("Search fallback is not initialized")
     reason = "All Tavily API keys are exhausted or in cooldown"
-    logger.warning("%s; activating search fallback", reason)
-    return await fallback.search(params["query"], params, reason)
+    logger.warning("%s; activating %s fallback", reason, endpoint)
+    if endpoint == "search":
+        return await fallback.search(params["query"], params, reason)
+    if endpoint == "extract":
+        return await fallback.extract(params["urls"], params, reason)
+    raise RuntimeError(f"No fallback is available for {endpoint}")
 
 
 # ── tools (Tavily MCP interface, minus research) ───────────────

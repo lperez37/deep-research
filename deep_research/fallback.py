@@ -47,6 +47,7 @@ class SearchFallback:
         jina_base_url: str,
         content_max_chars: int,
         search_content_max_chars: int,
+        extract_total_max_chars: int,
         tracker: CreditTracker,
         daily_cost_limit_usd: float,
         max_concurrency: int,
@@ -61,6 +62,7 @@ class SearchFallback:
         self._llm_output_cost_per_million = llm_output_cost_per_million
         self._content_max_chars = content_max_chars
         self._search_content_max_chars = search_content_max_chars
+        self._extract_total_max_chars = extract_total_max_chars
         self._tracker = tracker
         self._daily_cost_limit_usd = daily_cost_limit_usd
         self._semaphore = asyncio.Semaphore(max_concurrency)
@@ -89,9 +91,6 @@ class SearchFallback:
             raise ValueError("Fallback supports at most 10 domain filters")
         if params.get("topic", "general") != "general":
             raise ValueError("Fallback supports only general web searches")
-        country = params.get("country")
-        if country and country.casefold() not in {"netherlands", "the netherlands"}:
-            raise ValueError("Fallback search location is fixed to Amsterdam")
         reservation_day = self._tracker.reserve_fallback_cost(
             self._cost_reservation_usd, self._daily_cost_limit_usd
         )
@@ -108,9 +107,13 @@ class SearchFallback:
         """Run one pipeline after its maximum cost has been reserved."""
         started = time.perf_counter()
         candidates, serp_cost = await self._get_candidates(query, params)
-        selected, llm_usage, llm_cost, llm_cost_source = await self._select_sources(
-            query, candidates
-        )
+        (
+            selected,
+            llm_usage,
+            llm_cost,
+            llm_cost_source,
+            selection_method,
+        ) = await self._select_sources(query, candidates)
         scraped = await asyncio.gather(
             *(
                 self._scrape(
@@ -152,8 +155,11 @@ class SearchFallback:
                 "sources_returned": len(results),
                 "scrape_failures": failures,
                 "location": self._location_name,
+                "requested_country": params.get("country"),
+                "requested_country_ignored": bool(params.get("country")),
                 "content_limit_chars": self._search_content_max_chars,
                 "raw_content_limit_chars": self._content_max_chars,
+                "selection_method": selection_method,
                 "daily_spend_usd": round(self._tracker.get_fallback_spend(), 6),
                 "daily_limit_usd": self._daily_cost_limit_usd,
                 "cost_usd": {
@@ -187,6 +193,13 @@ class SearchFallback:
             return_exceptions=True,
         )
         results = [item for item in extracted if isinstance(item, dict)]
+        per_result_limit = (
+            min(self._content_max_chars, self._extract_total_max_chars // len(results))
+            if results
+            else self._content_max_chars
+        )
+        for result in results:
+            result["raw_content"] = result["raw_content"][:per_result_limit]
         failed_results = [
             {"url": original, "error": "URL is not a public HTTP(S) target"}
             for original, safe in targets
@@ -213,6 +226,8 @@ class SearchFallback:
                 "urls_failed": len(failed_results),
                 "query_reranking_applied": False,
                 "content_limit_chars": self._content_max_chars,
+                "total_content_limit_chars": self._extract_total_max_chars,
+                "effective_per_result_limit_chars": per_result_limit,
                 "cost_usd": {"jina_scraping": 0.0, "total": 0.0},
             },
         }
@@ -290,9 +305,9 @@ class SearchFallback:
 
     async def _select_sources(
         self, query: str, candidates: list[SearchCandidate]
-    ) -> tuple[list[tuple[SearchCandidate, float]], dict, float, str]:
+    ) -> tuple[list[tuple[SearchCandidate, float]], dict, float, str, str]:
         if not candidates:
-            return [], {}, 0.0, "no_call"
+            return [], {}, 0.0, "no_call", "no_candidates"
 
         candidate_data = [
             {
@@ -307,8 +322,8 @@ class SearchFallback:
         request = {
                 "model": self._llm_model,
                 "temperature": 0,
-                "reasoning_effort": "low",
-                "max_tokens": 1000,
+                "thinking": {"type": "disabled"},
+                "max_tokens": 500,
                 "response_format": {"type": "json_object"},
                 "messages": [
                     {
@@ -334,31 +349,31 @@ class SearchFallback:
                     },
                 ],
             }
-        body = None
         usage: dict = {}
         selections = None
-        for max_tokens in (1000, 2000):
-            request["max_tokens"] = max_tokens
+        selection_method = "llm"
+        try:
             response = await self._llm_http.post(
                 "/chat/completions",
                 headers={"Authorization": f"Bearer {self._llm_api_key}"},
                 json=request,
+                timeout=20.0,
             )
             response.raise_for_status()
             body = response.json()
-            current_usage = body.get("usage") or {}
-            for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                usage[key] = usage.get(key, 0) + (current_usage.get(key) or 0)
-            if current_usage.get("cost") is not None:
-                usage["cost"] = usage.get("cost", 0) + current_usage["cost"]
+            usage = body.get("usage") or {}
             try:
                 content = body["choices"][0]["message"]["content"]
                 selections = json.loads(content).get("selected", [])
-                break
             except (KeyError, IndexError, TypeError, json.JSONDecodeError):
-                continue
+                selection_method = "google_rank_after_invalid_llm"
+        except httpx.TimeoutException:
+            selection_method = "google_rank_after_llm_timeout"
         if selections is None:
-            raise RuntimeError("LLM returned an invalid relevance selection")
+            selections = [
+                {"index": index, "score": max(0.5, 0.95 - index * 0.05)}
+                for index in range(len(candidates))
+            ]
 
         prompt_tokens = int(usage.get("prompt_tokens") or 0)
         completion_tokens = int(usage.get("completion_tokens") or 0)
@@ -394,7 +409,7 @@ class SearchFallback:
             if len(selected) == self._RESULT_COUNT:
                 break
 
-        return selected, usage, llm_cost, cost_source
+        return selected, usage, llm_cost, cost_source, selection_method
 
     async def _scrape(
         self,

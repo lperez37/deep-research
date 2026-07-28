@@ -27,6 +27,7 @@ async def fallback():
         jina_base_url="http://jina.test",
         content_max_chars=20,
         search_content_max_chars=10,
+        extract_total_max_chars=30,
         tracker=tracker,
         daily_cost_limit_usd=1.0,
         max_concurrency=2,
@@ -115,7 +116,35 @@ async def test_search_selects_and_scrapes_three_sources(fallback: SearchFallback
     assert serp_payload["location_name"] == "Amsterdam,North Holland,Netherlands"
     llm_payload = json.loads(llm_route.calls.last.request.content)
     assert len(json.loads(llm_payload["messages"][1]["content"])["candidates"]) == 10
-    assert llm_payload["reasoning_effort"] == "low"
+    assert llm_payload["thinking"] == {"type": "disabled"}
+    assert llm_payload["max_tokens"] == 500
+    assert result["_fallback"]["selection_method"] == "llm"
+
+
+@respx.mock
+async def test_search_ignores_country_and_reports_amsterdam_location(
+    fallback: SearchFallback,
+):
+    serp_route = respx.post(
+        "https://dataforseo.test/v3/serp/google/organic/live/advanced"
+    ).mock(return_value=httpx.Response(200, json=_serp_response()))
+    respx.post("https://llm.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={
+            "choices": [{"message": {"content": '{"selected":[]}'}}],
+            "usage": {},
+        })
+    )
+
+    result = await fallback.search(
+        "Vencloud Spain software company",
+        {"country": "Spain"},
+        "keys exhausted",
+    )
+
+    payload = json.loads(serp_route.calls.last.request.content)[0]
+    assert payload["location_name"] == "Amsterdam,North Holland,Netherlands"
+    assert result["_fallback"]["requested_country"] == "Spain"
+    assert result["_fallback"]["requested_country_ignored"] is True
 
 
 @respx.mock
@@ -283,26 +312,17 @@ async def test_repeated_serp_no_results_returns_empty_success(
 
 
 @respx.mock
-async def test_null_llm_content_retries_with_larger_budget(
+async def test_null_llm_content_uses_google_rank_without_retry(
     fallback: SearchFallback,
 ):
     respx.post(
         "https://dataforseo.test/v3/serp/google/organic/live/advanced"
     ).mock(return_value=httpx.Response(200, json=_serp_response()))
     llm_route = respx.post("https://llm.test/v1/chat/completions").mock(
-        side_effect=[
-            httpx.Response(200, json={
-                "choices": [{"message": {"content": None}}],
-                "usage": {"total_tokens": 1000, "cost": 0.0001},
-            }),
-            httpx.Response(200, json={
-                "choices": [{"message": {"content": (
-                    '{"selected":[{"index":0,"score":0.9},'
-                    '{"index":1,"score":0.8},{"index":2,"score":0.7}]}'
-                )}}],
-                "usage": {"total_tokens": 500, "cost": 0.0002},
-            }),
-        ]
+        return_value=httpx.Response(200, json={
+            "choices": [{"message": {"content": None}}],
+            "usage": {"total_tokens": 500, "cost": 0.0001},
+        })
     )
     respx.post("http://jina.test/process").mock(
         return_value=httpx.Response(200, json={"markdown": "valid"})
@@ -310,10 +330,13 @@ async def test_null_llm_content_retries_with_larger_budget(
 
     result = await fallback.search("query", {}, "keys exhausted")
 
-    assert llm_route.call_count == 2
+    assert llm_route.call_count == 1
     assert len(result["results"]) == 3
-    assert result["_fallback"]["llm"]["total_tokens"] == 1500
-    assert result["_fallback"]["cost_usd"]["llm_relevance_selection"] == 0.0003
+    assert result["_fallback"]["llm"]["total_tokens"] == 500
+    assert result["_fallback"]["cost_usd"]["llm_relevance_selection"] == 0.0001
+    assert result["_fallback"]["selection_method"] == (
+        "google_rank_after_invalid_llm"
+    )
 
 
 @respx.mock
@@ -367,3 +390,22 @@ async def test_extract_text_format_uses_jina_content(fallback: SearchFallback):
     )
 
     assert result["results"][0]["raw_content"] == "Plain reader content"
+
+
+@respx.mock
+async def test_extract_shares_total_content_budget_across_results(
+    fallback: SearchFallback,
+):
+    respx.post("http://jina.test/process").mock(
+        return_value=httpx.Response(200, json={"markdown": "x" * 100})
+    )
+
+    result = await fallback.extract(
+        [f"https://source{index}.example" for index in range(3)],
+        {"format": "markdown"},
+        "keys exhausted",
+    )
+
+    assert [len(item["raw_content"]) for item in result["results"]] == [10, 10, 10]
+    assert result["_fallback"]["total_content_limit_chars"] == 30
+    assert result["_fallback"]["effective_per_result_limit_chars"] == 10

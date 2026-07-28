@@ -27,6 +27,9 @@ relevant sources, and fetches those pages concurrently as Markdown through a
 Jina Reader proxy. Fallback responses identify themselves and include a cost
 breakdown.
 
+The fallback location is always Amsterdam. A `country` requested by the client
+is ignored only during fallback and is echoed in fallback metadata for clarity.
+
 ```
 Client (Claude Code, etc.)
     |
@@ -151,6 +154,7 @@ override is enabled.
 | `JINA_SCRAPER_BASE_URL` | `http://100.119.183.110:9567` | Jina Reader proxy URL |
 | `FALLBACK_CONTENT_MAX_CHARS` | `12000` | Maximum explicit raw/extract characters per source |
 | `FALLBACK_SEARCH_CONTENT_MAX_CHARS` | `3000` | Maximum normal search-result characters per source |
+| `FALLBACK_EXTRACT_TOTAL_MAX_CHARS` | `24000` | Aggregate character budget shared across extracted URLs |
 | `FALLBACK_DAILY_COST_LIMIT_USD` | `1.00` | Durable UTC daily fallback spending ceiling |
 | `FALLBACK_MAX_CONCURRENCY` | `2` | Maximum simultaneous fallback pipelines |
 | `FALLBACK_MAX_COST_PER_SEARCH_USD` | `0.02` | Reserved upper cost bound per search |

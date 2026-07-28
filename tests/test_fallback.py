@@ -228,6 +228,58 @@ async def test_serp_internal_error_retries_once(fallback: SearchFallback):
 
 
 @respx.mock
+async def test_serp_no_results_retries_without_domain_token(
+    fallback: SearchFallback,
+):
+    route = respx.post(
+        "https://dataforseo.test/v3/serp/google/organic/live/advanced"
+    ).mock(side_effect=[
+        httpx.Response(200, json={"tasks": [{
+            "status_code": 40101,
+            "status_message": "No Search Results.",
+            "cost": 0.002,
+        }]}),
+        httpx.Response(200, json=_serp_response()),
+    ])
+    respx.post("https://llm.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={
+            "choices": [{"message": {"content": '{"selected":[]}'}}],
+            "usage": {},
+        })
+    )
+
+    result = await fallback.search(
+        "Properize properize.com company product", {}, "keys exhausted"
+    )
+
+    assert route.call_count == 2
+    first = json.loads(route.calls[0].request.content)[0]["keyword"]
+    second = json.loads(route.calls[1].request.content)[0]["keyword"]
+    assert first == "Properize properize.com company product"
+    assert second == "Properize company product"
+    assert result["_fallback"]["cost_usd"]["dataforseo_serp"] == 0.004
+
+
+@respx.mock
+async def test_repeated_serp_no_results_returns_empty_success(
+    fallback: SearchFallback,
+):
+    route = respx.post(
+        "https://dataforseo.test/v3/serp/google/organic/live/advanced"
+    ).mock(return_value=httpx.Response(200, json={"tasks": [{
+        "status_code": 40101,
+        "status_message": "No Search Results.",
+        "cost": 0.002,
+    }]}))
+
+    result = await fallback.search("unknown.example", {}, "keys exhausted")
+
+    assert route.call_count == 2
+    assert result["results"] == []
+    assert result["_fallback"]["serp_candidates"] == 0
+
+
+@respx.mock
 async def test_null_llm_content_retries_with_larger_budget(
     fallback: SearchFallback,
 ):

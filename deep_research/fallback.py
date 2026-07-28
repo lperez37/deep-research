@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -243,8 +244,13 @@ class SearchFallback:
                 break
             message = current_task.get("status_message") or "missing task"
             if attempt == 0:
+                if "no search results" in message.casefold():
+                    simplified = self._remove_domain_tokens(query)
+                    payload[0]["keyword"] = self._search_keyword(simplified, params)
                 await asyncio.sleep(0.5)
         if task is None:
+            if "no search results" in message.casefold():
+                return [], serp_cost
             raise RuntimeError(f"DataForSEO SERP request failed: {message}")
 
         result = (task.get("result") or [{}])[0]
@@ -459,6 +465,17 @@ class SearchFallback:
     def _domain_matches(hostname: str, domain: str) -> bool:
         normalized = domain.casefold().strip().lstrip(".")
         return hostname == normalized or hostname.endswith(f".{normalized}")
+
+    @staticmethod
+    def _remove_domain_tokens(query: str) -> str:
+        """Remove URL/domain tokens that can cause spurious empty Google SERPs."""
+        domain = re.compile(
+            r"(?i)\b(?:https?://)?(?:www\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+            r"(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}"
+            r"(?::\d+)?(?:/\S*)?"
+        )
+        simplified = " ".join(domain.sub("", query).split())
+        return simplified or query
 
     @staticmethod
     def _safe_url(url: str) -> str | None:

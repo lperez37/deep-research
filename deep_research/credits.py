@@ -126,10 +126,16 @@ class CreditTracker:
                 credits              INTEGER,
                 attempts             INTEGER NOT NULL DEFAULT 0,
                 duration_ms          INTEGER,
-                error_code           TEXT
+                error_code           TEXT,
+                fallback_used        INTEGER NOT NULL DEFAULT 0,
+                fallback_provider    TEXT,
+                fallback_cost_microusd INTEGER,
+                fallback_items_returned INTEGER,
+                fallback_items_failed INTEGER
             )
             """
         )
+        self._ensure_fallback_audit_columns()
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_request_log_created_at "
             "ON request_log(created_at)"
@@ -179,6 +185,24 @@ class CreditTracker:
                     raise
                 time.sleep(0.05 * 2**attempt)
 
+    def _ensure_fallback_audit_columns(self) -> None:
+        """Add fallback audit columns to databases created by older releases."""
+        existing = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(request_log)")
+        }
+        columns = {
+            "fallback_used": "INTEGER NOT NULL DEFAULT 0",
+            "fallback_provider": "TEXT",
+            "fallback_cost_microusd": "INTEGER",
+            "fallback_items_returned": "INTEGER",
+            "fallback_items_failed": "INTEGER",
+        }
+        for name, declaration in columns.items():
+            if name not in existing:
+                self._conn.execute(
+                    f"ALTER TABLE request_log ADD COLUMN {name} {declaration}"
+                )
+
     # ── queries ────────────────────────────────────────────────
 
     @_locked
@@ -226,6 +250,48 @@ class CreditTracker:
         )
         columns = [description[0] for description in cursor.description]
         return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
+
+    @_locked
+    def get_fallback_request_summary(self) -> dict[str, object]:
+        """Return completed fallback counts and reported costs for today/month."""
+        def totals(modifier: str) -> dict[str, object]:
+            row = self._conn.execute(
+                """
+                SELECT COUNT(*), COALESCE(SUM(fallback_cost_microusd), 0)
+                FROM request_log
+                WHERE fallback_used = 1 AND status = 'succeeded'
+                  AND datetime(created_at) >= datetime('now', ?)
+                """,
+                (modifier,),
+            ).fetchone()
+            endpoints = self._conn.execute(
+                """
+                SELECT endpoint, COUNT(*)
+                FROM request_log
+                WHERE fallback_used = 1 AND status = 'succeeded'
+                  AND datetime(created_at) >= datetime('now', ?)
+                GROUP BY endpoint
+                """,
+                (modifier,),
+            ).fetchall()
+            return {
+                "completed": row[0],
+                "cost_usd": row[1] / 1_000_000,
+                "by_endpoint": {endpoint: count for endpoint, count in endpoints},
+            }
+
+        failed_today = self._conn.execute(
+            """
+            SELECT COUNT(*) FROM request_log
+            WHERE fallback_used = 1 AND status = 'failed'
+              AND datetime(created_at) >= datetime('now', 'start of day')
+            """
+        ).fetchone()[0]
+        return {
+            "today": totals("start of day"),
+            "current_month": totals("start of month"),
+            "failed_today": failed_today,
+        }
 
     # ── mutations ──────────────────────────────────────────────
 
@@ -322,17 +388,27 @@ class CreditTracker:
         duration_ms: int,
         credits: int | None = None,
         error_code: str | None = None,
+        fallback: Mapping[str, object] | None = None,
     ) -> None:
         """Complete an audit row with outcome data."""
         if status not in {"succeeded", "failed", "cancelled", "abandoned"}:
             raise ValueError(
                 "status must be 'succeeded', 'failed', 'cancelled' or 'abandoned'"
             )
+        fallback = fallback or {}
+        cost_usd = fallback.get("cost_usd")
+        cost_microusd = (
+            math.ceil(float(cost_usd) * 1_000_000)
+            if isinstance(cost_usd, (int, float))
+            else None
+        )
         self._conn.execute(
             """
             UPDATE request_log
             SET completed_at = ?, status = ?, credits = ?, attempts = ?,
-                duration_ms = ?, error_code = ?
+                duration_ms = ?, error_code = ?, fallback_used = ?,
+                fallback_provider = ?, fallback_cost_microusd = ?,
+                fallback_items_returned = ?, fallback_items_failed = ?
             WHERE id = ?
             """,
             (
@@ -342,6 +418,11 @@ class CreditTracker:
                 attempts,
                 duration_ms,
                 error_code,
+                int(bool(fallback)),
+                fallback.get("provider"),
+                cost_microusd,
+                fallback.get("items_returned"),
+                fallback.get("items_failed"),
                 request_log_id,
             ),
         )

@@ -92,6 +92,7 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
     last_rate_limit_error = None
     audit_id = None
     upstream_succeeded = False
+    fallback_audit: dict[str, object] | None = None
     audit_start = asyncio.create_task(_start_audit(endpoint, params, ctx))
 
     try:
@@ -144,8 +145,13 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
                 raise
 
         if endpoint in {"search", "extract"} and settings.fallback_enabled:
+            fallback_audit = {
+                "provider": "dataforseo+llm+jina" if endpoint == "search" else "jina"
+            }
             result = await _run_fallback(endpoint, params)
+            fallback_audit.update(_fallback_audit_metadata(endpoint, result))
             credits_used = 0
+            upstream_succeeded = True
             result["_credits_remaining"] = await _credits_summary()
             await _finish_audit(
                 audit_id,
@@ -153,6 +159,7 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
                 credits=0,
                 attempts=attempts,
                 started=started,
+                fallback=fallback_audit,
             )
             return result
         if last_rate_limit_error is not None:
@@ -167,6 +174,7 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
                 attempts=attempts,
                 started=started,
                 upstream_succeeded=upstream_succeeded,
+                fallback=fallback_audit,
             )
         )
         try:
@@ -185,6 +193,7 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
             attempts=attempts,
             started=started,
             error_code=_error_code(exc),
+            fallback=fallback_audit,
         )
         raise
 
@@ -605,6 +614,7 @@ async def credit_status() -> dict:
         "fallback_enabled": settings.fallback_enabled,
         "fallback_spend_today_usd": tracker.get_fallback_spend(),
         "fallback_daily_limit_usd": settings.fallback_daily_cost_limit_usd,
+        "fallback_requests": tracker.get_fallback_request_summary(),
     }
 
 
@@ -656,6 +666,7 @@ async def _finalize_cancelled_audit(
     started: float,
     credits: int | None,
     upstream_succeeded: bool,
+    fallback: dict | None,
 ) -> None:
     """Finalize cancellation independently of repeated request-task cancellation."""
     if audit_id is None:
@@ -667,6 +678,7 @@ async def _finalize_cancelled_audit(
         attempts=attempts,
         started=started,
         error_code=None if upstream_succeeded else "CancelledError",
+        fallback=fallback,
     )
 
 
@@ -678,6 +690,7 @@ async def _finish_audit(
     started: float,
     credits: int | None = None,
     error_code: str | None = None,
+    fallback: dict | None = None,
 ) -> None:
     await asyncio.to_thread(
         _finish_audit_sync,
@@ -687,6 +700,7 @@ async def _finish_audit(
         started=started,
         credits=credits,
         error_code=error_code,
+        fallback=fallback,
     )
 
 
@@ -698,6 +712,7 @@ def _finish_audit_sync(
     started: float,
     credits: int | None = None,
     error_code: str | None = None,
+    fallback: dict | None = None,
 ) -> None:
     if audit_id is None:
         return
@@ -710,6 +725,7 @@ def _finish_audit_sync(
             attempts=attempts,
             duration_ms=duration_ms,
             error_code=error_code,
+            fallback=fallback,
         )
     except Exception:
         logger.exception("Failed to finish request audit row %s", audit_id)
@@ -722,6 +738,23 @@ def _error_code(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError):
         return f"http_{exc.response.status_code}"
     return type(exc).__name__[:128]
+
+
+def _fallback_audit_metadata(endpoint: str, result: dict) -> dict[str, object]:
+    """Extract bounded fallback outcome fields from a successful response."""
+    metadata = result.get("_fallback") or {}
+    costs = metadata.get("cost_usd") or {}
+    if endpoint == "search":
+        returned = metadata.get("sources_returned", 0)
+        failed = metadata.get("scrape_failures", 0)
+    else:
+        returned = metadata.get("urls_returned", 0)
+        failed = metadata.get("urls_failed", 0)
+    return {
+        "cost_usd": costs.get("total", 0.0),
+        "items_returned": int(returned),
+        "items_failed": int(failed),
+    }
 
 
 def _audit_target(params: dict) -> str | None:

@@ -172,6 +172,7 @@ The log contains:
 - requester ID, hostname, application and application version
 - source IP and user agent for HTTP requests
 - success, failure, cancellation or abandoned status, Tavily credits, attempts, duration and a bounded error code
+- fallback provider, reported USD cost, returned-item count and failed-item count
 
 An HTTP client disconnect does not necessarily cancel work already accepted by
 FastMCP. If Tavily completes after a disconnect, the row records the upstream
@@ -203,6 +204,10 @@ removed. Malformed targets are recorded as `[invalid URL]`. Queries and
 instructions are capped at `AUDIT_MAX_TEXT_CHARS` characters. Truncated values
 include a SHA-256 fingerprint of the complete input. The SQLite database and
 live WAL sidecars are restricted to owner access (`0600`).
+
+`credit-status` includes completed fallback counts for today and the current
+month, grouped by tool, plus reported fallback cost and today's failed fallback
+attempt count.
 
 Queries and source IP addresses can contain personal or confidential data. The
 audit log is therefore not exposed as an MCP tool. Inspect it only through

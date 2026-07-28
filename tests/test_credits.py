@@ -171,6 +171,75 @@ class TestRequestAuditLog:
         assert row["attempts"] == 3
         assert row["error_code"] == "tavily_http_429"
 
+    def test_fallback_outcome_is_persisted_and_summarized(
+        self, tracker: CreditTracker
+    ) -> None:
+        search_id = tracker.start_request(
+            endpoint="search", query="fallback query", target=None, requester={}
+        )
+        tracker.finish_request(
+            search_id,
+            status="succeeded",
+            attempts=0,
+            duration_ms=250,
+            credits=0,
+            fallback={
+                "provider": "dataforseo+llm+jina",
+                "cost_usd": 0.0041813,
+                "items_returned": 3,
+                "items_failed": 0,
+            },
+        )
+        extract_id = tracker.start_request(
+            endpoint="extract", query=None, target="https://example.com", requester={}
+        )
+        tracker.finish_request(
+            extract_id,
+            status="succeeded",
+            attempts=0,
+            duration_ms=100,
+            credits=0,
+            fallback={
+                "provider": "jina",
+                "cost_usd": 0.0,
+                "items_returned": 1,
+                "items_failed": 0,
+            },
+        )
+
+        rows = tracker.get_recent_requests(limit=2)
+        assert rows[0]["fallback_used"] == 1
+        assert rows[0]["fallback_provider"] == "jina"
+        assert rows[1]["fallback_cost_microusd"] == 4182
+        assert rows[1]["fallback_items_returned"] == 3
+        summary = tracker.get_fallback_request_summary()
+        assert summary["today"] == {
+            "completed": 2,
+            "cost_usd": 0.004182,
+            "by_endpoint": {"extract": 1, "search": 1},
+        }
+        assert summary["current_month"] == summary["today"]
+        assert summary["failed_today"] == 0
+
+    def test_failed_fallback_attempt_is_counted_separately(
+        self, tracker: CreditTracker
+    ) -> None:
+        audit_id = tracker.start_request(
+            endpoint="search", query="failed", target=None, requester={}
+        )
+        tracker.finish_request(
+            audit_id,
+            status="failed",
+            attempts=0,
+            duration_ms=10,
+            error_code="RuntimeError",
+            fallback={"provider": "dataforseo+llm+jina"},
+        )
+
+        summary = tracker.get_fallback_request_summary()
+        assert summary["today"]["completed"] == 0
+        assert summary["failed_today"] == 1
+
     def test_invalid_finish_status_is_rejected(self, tracker: CreditTracker) -> None:
         audit_id = tracker.start_request(
             endpoint="search", query="q", target=None, requester={}

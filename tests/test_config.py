@@ -38,3 +38,29 @@ def test_stdio_remains_unauthenticated_by_default(monkeypatch) -> None:
     monkeypatch.delenv("AUTH_TOKEN", raising=False)
     settings = Settings(tavily_api_keys="test-key", transport="stdio")
     assert settings.auth_token == ""
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("session_burst_limit", -1, "SESSION_BURST_LIMIT cannot be negative"),
+        (
+            "session_burst_window_seconds",
+            0,
+            "SESSION_BURST_WINDOW_SECONDS must be greater than 0",
+        ),
+        (
+            "session_burst_window_seconds",
+            float("nan"),
+            "SESSION_BURST_WINDOW_SECONDS must be greater than 0",
+        ),
+        (
+            "session_burst_window_seconds",
+            float("inf"),
+            "SESSION_BURST_WINDOW_SECONDS must be greater than 0",
+        ),
+    ],
+)
+def test_invalid_burst_settings_are_rejected(field, value, message) -> None:
+    with pytest.raises(ValidationError, match=message):
+        Settings(tavily_api_keys="test-key", **{field: value})

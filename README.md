@@ -133,6 +133,8 @@ override is enabled.
 | `AUDIT_MAX_TEXT_CHARS` | `8192` | Maximum persisted query or instruction length |
 | `AUDIT_RETENTION_DAYS` | `90` | Automatic completed-row retention |
 | `AUDIT_BUSY_TIMEOUT_SECONDS` | `0.1` | Maximum SQLite lock wait for request audit writes |
+| `SESSION_BURST_LIMIT` | `5` | Metered calls allowed per MCP session window (`0` disables) |
+| `SESSION_BURST_WINDOW_SECONDS` | `60` | Rolling session burst window in seconds |
 
 ## Request audit log
 
@@ -169,6 +171,11 @@ These headers are self-declared labels, not authenticated identity claims. Raw
 headers and credentials are never stored. `X-Forwarded-For` is ignored unless
 `TRUST_PROXY_HEADERS=true` because it is otherwise spoofable. For stdio, the
 local hostname and MCP client information are recorded automatically.
+
+The server rejects a sixth metered Tavily call from the same MCP session within
+60 seconds by default. This circuit breaker prevents accidental agent fan-out
+before additional credits are spent. Adjust the two `SESSION_BURST_*` settings
+only when another gateway already enforces a research budget.
 
 Stored URL targets retain scheme, host and port plus a non-reversible path
 fingerprint. User information, path content, query strings and fragments are

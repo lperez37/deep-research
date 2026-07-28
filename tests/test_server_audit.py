@@ -28,6 +28,7 @@ finally:
         else:
             os.environ[name] = value
 
+from deep_research.burst import SessionBurstLimiter
 from deep_research.credits import CreditTracker
 from deep_research.router import KeyRouter
 from deep_research.tavily_client import TavilyAPIError
@@ -82,7 +83,7 @@ class CancellableClient:
         raise AssertionError("unreachable")
 
 
-async def test_complete_public_tool_schemas_match_main_snapshot() -> None:
+async def test_complete_public_tool_schemas_match_budgeted_gateway_snapshot() -> None:
     async with Client(server.mcp, name="schema-tester") as client:
         tools = await client.list_tools()
 
@@ -95,9 +96,9 @@ async def test_complete_public_tool_schemas_match_main_snapshot() -> None:
     )
     payload = json.dumps(serialized, sort_keys=True, separators=(",", ":")).encode()
 
-    # Canonical complete five-tool snapshot from main under FastMCP 3.4.5.
+    # Complete five-tool snapshot, including gateway-specific budget guidance.
     assert hashlib.sha256(payload).hexdigest() == (
-        "478380324ef33333238e81576840e20237c89fced061b66ff9c134ab64905c3a"
+        "0b621f5e02900f29106e2a903504ddc5af1f1338a4d0a18643aa0b84bc278f69"
     )
     assert all(
         "ctx" not in tool["inputSchema"].get("properties", {}) for tool in serialized
@@ -114,6 +115,7 @@ async def _install_test_dependencies(monkeypatch, *, keys=None):
     monkeypatch.setattr(server, "tracker", tracker)
     monkeypatch.setattr(server, "audit_tracker", tracker)
     monkeypatch.setattr(server, "router", router)
+    monkeypatch.setattr(server, "burst_limiter", SessionBurstLimiter(100, 60))
     return tracker
 
 
@@ -142,6 +144,35 @@ async def test_search_call_is_logged_end_to_end(monkeypatch) -> None:
         assert row["attempts"] == 1
         assert row["request_id"] is not None
         assert row["session_id"] is not None
+    finally:
+        tracker.close()
+
+
+async def test_session_burst_limit_blocks_before_upstream_call(monkeypatch) -> None:
+    tracker = await _install_test_dependencies(monkeypatch)
+    monkeypatch.setattr(server, "client", GenericSuccessfulClient())
+    monkeypatch.setattr(server, "burst_limiter", SessionBurstLimiter(2, 60))
+
+    try:
+        async with Client(server.mcp, name="burst-tester") as client:
+            for query in ("first", "second"):
+                result = await client.call_tool("tavily-search", {"query": query})
+                assert result.data["endpoint"] == "search"
+            blocked = await client.call_tool(
+                "tavily-search", {"query": "blocked"}, raise_on_error=False
+            )
+
+        assert blocked.is_error
+        assert "burst limit reached" in str(blocked.content)
+        rows = tracker.get_recent_requests()
+        assert [row["status"] for row in rows] == [
+            "failed",
+            "succeeded",
+            "succeeded",
+        ]
+        assert rows[0]["attempts"] == 0
+        assert rows[0]["credits"] is None
+        assert rows[0]["error_code"] == "BurstLimitExceeded"
     finally:
         tracker.close()
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from pydantic import computed_field, model_validator
 from pydantic_settings import BaseSettings
 
@@ -53,6 +55,11 @@ class Settings(BaseSettings):
     audit_retention_days: int = 90
     audit_busy_timeout_seconds: float = 0.1
 
+    # Bound accidental parallel fan-out from one MCP client session. Set the
+    # limit to 0 only when another gateway already enforces a budget.
+    session_burst_limit: int = 5
+    session_burst_window_seconds: float = 60.0
+
     model_config = {
         "env_prefix": "",
         "env_nested_delimiter": "__",
@@ -82,4 +89,11 @@ class Settings(BaseSettings):
             raise ValueError("AUDIT_RETENTION_DAYS must be at least 1")
         if not 0 <= self.audit_busy_timeout_seconds <= 1:
             raise ValueError("AUDIT_BUSY_TIMEOUT_SECONDS must be between 0 and 1")
+        if self.session_burst_limit < 0:
+            raise ValueError("SESSION_BURST_LIMIT cannot be negative")
+        if (
+            not math.isfinite(self.session_burst_window_seconds)
+            or self.session_burst_window_seconds <= 0
+        ):
+            raise ValueError("SESSION_BURST_WINDOW_SECONDS must be greater than 0")
         return self

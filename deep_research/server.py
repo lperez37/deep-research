@@ -18,6 +18,7 @@ from pydantic import Field
 
 from deep_research.audit import requester_metadata
 from deep_research.auth import ConfiguredTokenVerifier
+from deep_research.burst import SessionBurstLimiter
 from deep_research.config import Settings
 from deep_research.credits import CreditTracker, estimate_credits
 from deep_research.router import KeyRouter
@@ -49,6 +50,10 @@ router = KeyRouter(
     cooldown_hours=settings.cooldown_hours,
 )
 client = TavilyClient(base_url=settings.tavily_base_url)
+burst_limiter = SessionBurstLimiter(
+    limit=settings.session_burst_limit,
+    window_seconds=settings.session_burst_window_seconds,
+)
 
 auth = ConfiguredTokenVerifier(settings.auth_token) if settings.auth_token else None
 mcp = FastMCP(name="deep-research", auth=auth)
@@ -72,6 +77,7 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
 
     try:
         audit_id = await asyncio.shield(audit_start)
+        burst_limiter.check(_context_session_id(ctx))
         for attempt in range(_MAX_RETRIES):
             try:
                 key = await router.get_key()
@@ -297,7 +303,7 @@ async def tavily_search(
         ),
     ] = False,
 ) -> dict:
-    """Search the web for current information on any topic. Use for news, facts, or data beyond your knowledge cutoff. Returns snippets and source URLs."""
+    """Search the web for current information on any topic. This is a metered tool: do not invoke Tavily tools in parallel, prefer one broad query, and use at most three Tavily calls per research task unless the user approves more within the server's hard burst limit. Returns snippets and source URLs."""
     params = _strip_none(locals())
     return await _route_request("search", params, ctx)
 
@@ -342,7 +348,7 @@ async def tavily_extract(
         Field(default=False, description="Include favicon URLs"),
     ] = False,
 ) -> dict:
-    """Extract content from URLs. Returns raw page content in markdown or text format."""
+    """Extract content from URLs. This is a metered tool: batch useful URLs into one call, never invoke Tavily tools in parallel, and stay within three Tavily calls per research task unless the user approves more within the server's hard burst limit. Returns raw page content in markdown or text format."""
     params = _strip_none(locals())
     return await _route_request("extract", params, ctx)
 
@@ -452,7 +458,7 @@ async def tavily_crawl(
         ),
     ] = False,
 ) -> dict:
-    """Crawl a website starting from a URL. Extracts content from pages with configurable depth and breadth."""
+    """Crawl a website starting from a URL. This is a metered tool: do not invoke Tavily tools in parallel and stay within three Tavily calls per research task unless the user approves more within the server's hard burst limit. Extracts content from pages with configurable depth and breadth."""
     params = _strip_none(locals())
     return await _route_request("crawl", params, ctx)
 
@@ -530,7 +536,7 @@ async def tavily_map(
         ),
     ] = True,
 ) -> dict:
-    """Map a website's structure. Returns a list of URLs found starting from the base URL."""
+    """Map a website's structure. This is a metered tool: do not invoke Tavily tools in parallel and stay within three Tavily calls per research task unless the user approves more within the server's hard burst limit. Returns a list of URLs found from the base URL."""
     params = _strip_none(locals())
     return await _route_request("map", params, ctx)
 
@@ -558,6 +564,18 @@ async def credit_status() -> dict:
 
 
 # ── helpers ────────────────────────────────────────────────────
+
+
+def _context_session_id(ctx: Context) -> str | None:
+    """Read a bounded MCP session identifier without affecting availability."""
+    try:
+        value = ctx.session_id
+    except RuntimeError:
+        return None
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned[:1024] or None
 
 
 async def _start_audit(endpoint: str, params: dict, ctx: Context) -> int | None:

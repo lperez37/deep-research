@@ -31,13 +31,13 @@ class SearchFallback:
 
     _SERP_PATH = "/serp/google/organic/live/advanced"
     _RESULT_COUNT = 3
-    _SUMMARY_MAX_CHARS = 1_200
-    _EXTRACT_SUMMARY_MAX_CHARS = 600
+    _SUMMARY_MAX_CHARS = 600
+    _EXTRACT_SUMMARY_MAX_CHARS = 300
     _EXTRACT_SUMMARY_TOTAL_MAX_CHARS = 6_000
-    _METADATA_MAX_CHARS = 1_000
-    _EXTRACT_METADATA_TOTAL_MAX_CHARS = 6_000
-    _ANSWER_MAX_CHARS = 2_000
-    _KEY_FACTS_MAX = 8
+    _METADATA_MAX_CHARS = 600
+    _EXTRACT_METADATA_TOTAL_MAX_CHARS = 2_400
+    _ANSWER_MAX_CHARS = 1_000
+    _KEY_FACTS_MAX = 3
     _URL_MAX_CHARS = 2_048
 
     def __init__(
@@ -418,7 +418,7 @@ class SearchFallback:
             "model": self._llm_model,
             "temperature": 0,
             "thinking": {"type": "disabled"},
-            "max_tokens": 1_800,
+            "max_tokens": 1_000,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -435,10 +435,10 @@ class SearchFallback:
                         "\"phone\":null,\"email\":null,\"website\":null,\"industry\":"
                         "null,\"founded\":null,\"key_facts\":[]}}]}. Include every "
                         "provided source exactly once using its index. Use only facts "
-                        "supported by that source. Use null for unknown scalar metadata "
-                        "and no more than 8 short key facts. Keep each summary under "
-                        f"{summary_max_chars} characters and the answer under 2000 "
-                        "characters."
+                        "supported by that source. Omit unknown metadata fields, use "
+                        "no more than 3 short key facts, and keep metadata terse. Keep "
+                        f"each summary under {summary_max_chars} characters and the "
+                        "answer under 1000 characters."
                     ),
                 },
                 {

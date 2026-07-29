@@ -566,6 +566,25 @@ class SearchFallback:
             )
             scored.append((index, score, covered))
 
+        priority_intents = [
+            intent for intent in ("pricing", "address", "ownership")
+            if intent in requested_intents
+        ]
+        if len(priority_intents) == cls._RESULT_COUNT:
+            priority_selection: list[int] = []
+            for intent in priority_intents:
+                matching = [item for item in scored if intent in item[2]]
+                if not matching:
+                    break
+                best = max(
+                    matching,
+                    key=lambda item: (item[1], -candidates[item[0]].rank),
+                )
+                if best[0] not in priority_selection:
+                    priority_selection.append(best[0])
+            if len(priority_selection) == cls._RESULT_COUNT:
+                return priority_selection
+
         selected: list[int] = []
         covered_intents: set[str] = set()
         while scored and len(selected) < min(cls._RESULT_COUNT, len(candidates)):
@@ -613,7 +632,7 @@ class SearchFallback:
             "model": self._llm_model,
             "temperature": 0,
             "thinking": {"type": "disabled"},
-            "max_tokens": 1_000,
+            "max_tokens": 1_500,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -653,7 +672,7 @@ class SearchFallback:
                 "/chat/completions",
                 headers={"Authorization": f"Bearer {self._llm_api_key}"},
                 json=request,
-                timeout=20.0,
+                timeout=25.0,
             )
             response.raise_for_status()
             body = response.json()

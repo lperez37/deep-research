@@ -171,7 +171,7 @@ async def test_search_scrapes_and_synthesizes_three_sources(fallback: SearchFall
     assert all(len(source["markdown"]) == 10 for source in llm_sources)
     assert selection_payload["thinking"] == {"type": "disabled"}
     assert selection_payload["max_tokens"] == 150
-    assert synthesis_payload["max_tokens"] == 1000
+    assert synthesis_payload["max_tokens"] == 1500
     assert result["_fallback"]["source_selection_method"] == "llm"
     assert result["_fallback"]["synthesis_method"] == "llm"
     assert result["_fallback"]["search_complete"] is True
@@ -311,6 +311,12 @@ def test_intent_rank_avoids_unrelated_high_ranked_result():
             "Acquisition and ownership news",
             7,
         ),
+        SearchCandidate(
+            "Prijzen Properize",
+            "https://properize.com/prijzen/",
+            "Properize pricing and subscription costs",
+            8,
+        ),
     ]
 
     selected = SearchFallback._rank_candidate_indices(
@@ -318,6 +324,9 @@ def test_intent_rank_avoids_unrelated_high_ranked_result():
     )
 
     assert selected == [0, 2, 3]
+    assert SearchFallback._rank_candidate_indices(
+        "Properize pricing address country ownership", candidates
+    ) == [4, 2, 3]
 
 
 def test_business_search_keyword_focuses_requested_company_fields():

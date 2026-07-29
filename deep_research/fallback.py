@@ -536,17 +536,35 @@ class SearchFallback:
             intent for intent, terms in intent_terms.items()
             if query_terms & terms
         }
+        intent_vocabulary = set().union(*intent_terms.values())
+        candidate_texts = [
+            f"{candidate.title} {candidate.url} {candidate.description}".casefold()
+            for candidate in candidates
+        ]
+        anchor_terms = {
+            term for term in query_terms - intent_vocabulary
+            if 2 <= sum(term in text for text in candidate_texts)
+            <= max(2, len(candidates) // 2)
+        }
         scored: list[tuple[int, float, set[str]]] = []
         for index, candidate in enumerate(candidates):
             title_url = f"{candidate.title} {candidate.url}".casefold()
-            haystack = f"{title_url} {candidate.description}".casefold()
+            haystack = candidate_texts[index]
             term_hits = sum(term in haystack for term in query_terms)
             prominent_hits = sum(term in title_url for term in query_terms)
             covered = {
                 intent for intent in requested_intents
                 if any(term in haystack for term in intent_terms[intent])
             }
-            score = term_hits * 2 + prominent_hits + 1 / max(candidate.rank, 1)
+            anchor_score = sum(term in haystack for term in anchor_terms)
+            if anchor_terms and not anchor_score:
+                anchor_score = -1
+            score = (
+                term_hits * 2
+                + prominent_hits
+                + anchor_score * 10
+                + 1 / max(candidate.rank, 1)
+            )
             scored.append((index, score, covered))
 
         selected: list[int] = []

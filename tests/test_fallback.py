@@ -87,16 +87,26 @@ async def test_search_scrapes_and_synthesizes_three_sources(fallback: SearchFall
         "https://dataforseo.test/v3/serp/google/organic/live/advanced"
     ).mock(return_value=httpx.Response(200, json=_serp_response()))
     llm_route = respx.post("https://llm.test/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={
-            "choices": [{"message": {"content": json.dumps({
-                **_synthesis_response(),
-            })}}],
-            "usage": {
-                "prompt_tokens": 500,
-                "completion_tokens": 50,
-                "total_tokens": 550,
-            },
-        })
+        side_effect=[
+            httpx.Response(200, json={
+                "choices": [{"message": {"content": '{"selected":[0,2,5]}'}}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 10,
+                    "total_tokens": 110,
+                },
+            }),
+            httpx.Response(200, json={
+                "choices": [{"message": {"content": json.dumps(
+                    _synthesis_response()
+                )}}],
+                "usage": {
+                    "prompt_tokens": 500,
+                    "completion_tokens": 50,
+                    "total_tokens": 550,
+                },
+            }),
+        ]
     )
 
     async def jina_response(request: httpx.Request) -> httpx.Response:
@@ -115,7 +125,12 @@ async def test_search_scrapes_and_synthesizes_three_sources(fallback: SearchFall
         "useful query", {"include_raw_content": True}, "keys exhausted"
     )
 
-    assert [item["score"] for item in result["results"]] == [1.0, 0.95, 0.9]
+    assert [item["score"] for item in result["results"]] == [1.0, 0.9, 0.75]
+    assert [item["url"] for item in result["results"]] == [
+        "https://source0.example/article",
+        "https://source2.example/article",
+        "https://source5.example/article",
+    ]
     assert [item["content"] for item in result["results"]] == [
         "Compact summary 0", "Compact summary 1", "Compact summary 2"
     ]
@@ -129,29 +144,34 @@ async def test_search_scrapes_and_synthesizes_three_sources(fallback: SearchFall
     }
     assert all("raw_content" not in item for item in result["results"])
     assert jina_route.call_count == 3
-    assert result["_fallback"]["serp_candidates"] == 3
+    assert result["_fallback"]["serp_candidates"] == 10
     assert result["_fallback"]["sources_returned"] == 3
     assert result["_fallback"]["synthesis_input_limit_chars_per_source"] == 10
     assert result["_fallback"]["summary_limit_chars"] == 900
     assert result["_fallback"]["raw_content_requested_but_omitted"] is True
     assert result["_fallback"]["cost_usd"] == {
         "dataforseo_serp": 0.002,
+        "llm_source_selection": 0.0000168,
         "llm_synthesis": 0.000084,
         "jina_scraping": 0.0,
-        "total": 0.002084,
+        "total": 0.0021008,
     }
 
     serp_payload = json.loads(serp_route.calls.last.request.content)[0]
-    assert serp_payload["depth"] == 10
+    assert serp_payload["depth"] == 20
     assert serp_payload["location_name"] == "Amsterdam,North Holland,Netherlands"
-    llm_payload = json.loads(llm_route.calls.last.request.content)
-    llm_sources = json.loads(llm_payload["messages"][1]["content"])["sources"]
+    selection_payload = json.loads(llm_route.calls[0].request.content)
+    synthesis_payload = json.loads(llm_route.calls[1].request.content)
+    llm_sources = json.loads(synthesis_payload["messages"][1]["content"])["sources"]
     assert len(llm_sources) == 3
     assert all(len(source["markdown"]) == 10 for source in llm_sources)
-    assert llm_payload["thinking"] == {"type": "disabled"}
-    assert llm_payload["max_tokens"] == 1500
-    assert result["_fallback"]["source_selection_method"] == "google_rank"
+    assert selection_payload["thinking"] == {"type": "disabled"}
+    assert selection_payload["max_tokens"] == 300
+    assert synthesis_payload["max_tokens"] == 1500
+    assert result["_fallback"]["source_selection_method"] == "llm"
     assert result["_fallback"]["synthesis_method"] == "llm"
+    assert result["_fallback"]["search_complete"] is True
+    assert result["_fallback"]["requires_extraction"] is False
 
 
 @respx.mock
@@ -363,9 +383,9 @@ async def test_null_llm_content_uses_serp_snippets_without_retry(
 
     result = await fallback.search("query", {}, "keys exhausted")
 
-    assert llm_route.call_count == 1
+    assert llm_route.call_count == 2
     assert len(result["results"]) == 3
-    assert result["_fallback"]["llm"]["total_tokens"] == 500
+    assert result["_fallback"]["llm"]["total_tokens"] == 1000
     assert result["_fallback"]["cost_usd"]["llm_synthesis"] == 0.0001
     assert result["_fallback"]["synthesis_method"] == (
         "serp_snippet_after_invalid_llm"

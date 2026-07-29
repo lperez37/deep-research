@@ -21,12 +21,13 @@ deep-research is a [FastMCP](https://github.com/jlowin/fastmcp) server that expo
 Credit usage and attributed request events are tracked in SQLite. Every response includes the remaining credit budget so you can see consumption in real time.
 
 An optional fallback can keep search and extraction available after every
-Tavily key is exhausted or cooling down. For search, it takes the top 3
-Amsterdam-localized Google organic results from DataForSEO, fetches those pages
-concurrently as Markdown through a Jina Reader proxy, then uses a fast LLM to
-produce a compact cross-source answer and per-source summaries with structured
-entity metadata. Raw page Markdown is never returned by fallback search, even
-when requested. Fallback extraction uses the same synthesis step instead of
+Tavily key is exhausted or cooling down. For search, it collects 10
+Amsterdam-localized Google organic results from DataForSEO, uses a fast LLM to
+select the three most relevant and complementary URLs, fetches those pages
+concurrently as Markdown through a Jina Reader proxy, then produces a compact
+cross-source answer and per-source summaries with structured entity metadata.
+Raw page Markdown is never returned by fallback search, even when requested.
+Fallback extraction uses the same synthesis step instead of
 returning page Markdown: each URL gets at most a 900-character summary, with a
 9,000-character aggregate summary budget. Fallback responses identify
 themselves and include a cost breakdown.

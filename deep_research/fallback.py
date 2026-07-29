@@ -31,12 +31,12 @@ class SearchFallback:
 
     _SERP_PATH = "/serp/google/organic/live/advanced"
     _RESULT_COUNT = 3
-    _SUMMARY_MAX_CHARS = 600
-    _EXTRACT_SUMMARY_MAX_CHARS = 300
-    _EXTRACT_SUMMARY_TOTAL_MAX_CHARS = 6_000
-    _METADATA_MAX_CHARS = 600
-    _EXTRACT_METADATA_TOTAL_MAX_CHARS = 2_400
-    _ANSWER_MAX_CHARS = 1_000
+    _SUMMARY_MAX_CHARS = 900
+    _EXTRACT_SUMMARY_MAX_CHARS = 900
+    _EXTRACT_SUMMARY_TOTAL_MAX_CHARS = 9_000
+    _METADATA_MAX_CHARS = 800
+    _EXTRACT_METADATA_TOTAL_MAX_CHARS = 8_000
+    _ANSWER_MAX_CHARS = 1_200
     _KEY_FACTS_MAX = 3
     _URL_MAX_CHARS = 2_048
 
@@ -418,7 +418,7 @@ class SearchFallback:
             "model": self._llm_model,
             "temperature": 0,
             "thinking": {"type": "disabled"},
-            "max_tokens": 1_000,
+            "max_tokens": 1_500,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -438,7 +438,7 @@ class SearchFallback:
                         "supported by that source. Omit unknown metadata fields, use "
                         "no more than 3 short key facts, and keep metadata terse. Keep "
                         f"each summary under {summary_max_chars} characters and the "
-                        "answer under 1000 characters."
+                        "answer under 1200 characters."
                     ),
                 },
                 {

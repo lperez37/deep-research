@@ -27,8 +27,8 @@ concurrently as Markdown through a Jina Reader proxy, then uses a fast LLM to
 produce a compact cross-source answer and per-source summaries with structured
 entity metadata. Raw page Markdown is never returned by fallback search, even
 when requested. Fallback extraction uses the same synthesis step instead of
-returning page Markdown: each URL gets at most a 300-character summary, with a
-6,000-character aggregate summary budget. Fallback responses identify
+returning page Markdown: each URL gets at most a 900-character summary, with a
+9,000-character aggregate summary budget. Fallback responses identify
 themselves and include a cost breakdown.
 
 The fallback location is always Amsterdam. A `country` requested by the client

@@ -132,7 +132,7 @@ async def test_search_scrapes_and_synthesizes_three_sources(fallback: SearchFall
     assert result["_fallback"]["serp_candidates"] == 3
     assert result["_fallback"]["sources_returned"] == 3
     assert result["_fallback"]["synthesis_input_limit_chars_per_source"] == 10
-    assert result["_fallback"]["summary_limit_chars"] == 600
+    assert result["_fallback"]["summary_limit_chars"] == 900
     assert result["_fallback"]["raw_content_requested_but_omitted"] is True
     assert result["_fallback"]["cost_usd"] == {
         "dataforseo_serp": 0.002,
@@ -149,7 +149,7 @@ async def test_search_scrapes_and_synthesizes_three_sources(fallback: SearchFall
     assert len(llm_sources) == 3
     assert all(len(source["markdown"]) == 10 for source in llm_sources)
     assert llm_payload["thinking"] == {"type": "disabled"}
-    assert llm_payload["max_tokens"] == 1000
+    assert llm_payload["max_tokens"] == 1500
     assert result["_fallback"]["source_selection_method"] == "google_rank"
     assert result["_fallback"]["synthesis_method"] == "llm"
 
@@ -512,9 +512,9 @@ async def test_extract_bounds_synthesis_input_and_summary_output(
     )
 
     assert result["answer"] == "Compact aggregate"
-    assert [len(item["raw_content"]) for item in result["results"]] == [300] * 3
+    assert [len(item["raw_content"]) for item in result["results"]] == [900] * 3
     assert result["_fallback"]["synthesis_input_limit_chars_per_source"] == 10
-    assert result["_fallback"]["summary_limit_chars_per_source"] == 300
+    assert result["_fallback"]["summary_limit_chars_per_source"] == 900
     llm_sources = json.loads(
         json.loads(llm_route.calls.last.request.content)["messages"][1]["content"]
     )["sources"]

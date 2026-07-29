@@ -458,7 +458,7 @@ class SearchFallback:
                 "/chat/completions",
                 headers={"Authorization": f"Bearer {self._llm_api_key}"},
                 json=request,
-                timeout=10.0,
+                timeout=30.0,
             )
             response.raise_for_status()
             body = response.json()

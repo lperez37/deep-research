@@ -71,8 +71,8 @@ class Settings(BaseSettings):
     fallback_llm_output_cost_per_million: float = 0.28
     jina_scraper_base_url: str = "http://100.119.183.110:9567"
     fallback_content_max_chars: int = 12_000
-    fallback_search_content_max_chars: int = 3_000
-    fallback_extract_total_max_chars: int = 24_000
+    fallback_search_content_max_chars: int = 1_500
+    fallback_extract_total_max_chars: int = 6_000
     fallback_daily_cost_limit_usd: float = 1.0
     fallback_max_concurrency: int = 2
     fallback_max_cost_per_search_usd: float = 0.02

@@ -32,12 +32,12 @@ class SearchFallback:
     _SERP_PATH = "/serp/google/organic/live/advanced"
     _CANDIDATE_COUNT = 10
     _RESULT_COUNT = 3
-    _SUMMARY_MAX_CHARS = 900
-    _EXTRACT_SUMMARY_MAX_CHARS = 900
-    _EXTRACT_SUMMARY_TOTAL_MAX_CHARS = 9_000
-    _METADATA_MAX_CHARS = 800
+    _SUMMARY_MAX_CHARS = 800
+    _EXTRACT_SUMMARY_MAX_CHARS = 800
+    _EXTRACT_SUMMARY_TOTAL_MAX_CHARS = 8_000
+    _METADATA_MAX_CHARS = 700
     _EXTRACT_METADATA_TOTAL_MAX_CHARS = 8_000
-    _ANSWER_MAX_CHARS = 1_200
+    _ANSWER_MAX_CHARS = 1_000
     _KEY_FACTS_MAX = 3
     _URL_MAX_CHARS = 2_048
 
@@ -461,7 +461,7 @@ class SearchFallback:
                 "/chat/completions",
                 headers={"Authorization": f"Bearer {self._llm_api_key}"},
                 json=request,
-                timeout=10.0,
+                timeout=6.0,
             )
             response.raise_for_status()
             body = response.json()
@@ -536,7 +536,7 @@ class SearchFallback:
             "model": self._llm_model,
             "temperature": 0,
             "thinking": {"type": "disabled"},
-            "max_tokens": 1_500,
+            "max_tokens": 1_200,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -556,7 +556,7 @@ class SearchFallback:
                         "supported by that source. Omit unknown metadata fields, use "
                         "no more than 3 short key facts, and keep metadata terse. Keep "
                         f"each summary under {summary_max_chars} characters and the "
-                        "answer under 1200 characters."
+                        "answer under 1000 characters."
                     ),
                 },
                 {
@@ -576,7 +576,7 @@ class SearchFallback:
                 "/chat/completions",
                 headers={"Authorization": f"Bearer {self._llm_api_key}"},
                 json=request,
-                timeout=30.0,
+                timeout=20.0,
             )
             response.raise_for_status()
             body = response.json()

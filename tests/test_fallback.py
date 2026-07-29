@@ -170,8 +170,8 @@ async def test_search_scrapes_and_synthesizes_three_sources(fallback: SearchFall
     assert len(llm_sources) == 3
     assert all(len(source["markdown"]) == 10 for source in llm_sources)
     assert selection_payload["thinking"] == {"type": "disabled"}
-    assert selection_payload["max_tokens"] == 500
-    assert synthesis_payload["max_tokens"] == 1200
+    assert selection_payload["max_tokens"] == 150
+    assert synthesis_payload["max_tokens"] == 1000
     assert result["_fallback"]["source_selection_method"] == "llm"
     assert result["_fallback"]["synthesis_method"] == "llm"
     assert result["_fallback"]["search_complete"] is True

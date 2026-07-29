@@ -420,7 +420,7 @@ class SearchFallback:
             "model": self._llm_model,
             "temperature": 0,
             "thinking": {"type": "disabled"},
-            "max_tokens": 500,
+            "max_tokens": 150,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -444,7 +444,7 @@ class SearchFallback:
                                 "index": index,
                                 "title": candidate.title,
                                 "url": candidate.url,
-                                "snippet": candidate.description,
+                                "snippet": candidate.description[:240],
                                 "google_rank": candidate.rank,
                             }
                             for index, candidate in enumerate(candidates)
@@ -461,7 +461,7 @@ class SearchFallback:
                 "/chat/completions",
                 headers={"Authorization": f"Bearer {self._llm_api_key}"},
                 json=request,
-                timeout=4.0,
+                timeout=6.0,
             )
             response.raise_for_status()
             body = response.json()
@@ -604,7 +604,9 @@ class SearchFallback:
                 "title": source["title"],
                 "url": source["url"],
                 "serp_snippet": source["snippet"],
-                "markdown": source.pop("_markdown")[:input_max_chars],
+                "markdown": self._compact_markdown(
+                    source.pop("_markdown"), input_max_chars
+                ),
             }
             for index, source in enumerate(sources)
         ]
@@ -612,7 +614,7 @@ class SearchFallback:
             "model": self._llm_model,
             "temperature": 0,
             "thinking": {"type": "disabled"},
-            "max_tokens": 1_200,
+            "max_tokens": 1_000,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -736,6 +738,21 @@ class SearchFallback:
         if not isinstance(parsed, dict):
             raise TypeError("LLM content is not a JSON object")
         return parsed
+
+    @staticmethod
+    def _compact_markdown(markdown: str, max_chars: int) -> str:
+        """Remove navigation-heavy Markdown noise before sending it to the LLM."""
+        text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", markdown)
+        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+        seen: set[str] = set()
+        lines: list[str] = []
+        for raw_line in text.splitlines():
+            line = re.sub(r"^\s*[*+-]\s+", "", raw_line).strip()
+            if not line or line.casefold() in seen:
+                continue
+            seen.add(line.casefold())
+            lines.append(line)
+        return "\n".join(lines)[:max_chars]
 
     def _llm_cost(self, usage: dict) -> tuple[float, str]:
         """Return provider-reported cost or estimate it from normalized usage."""

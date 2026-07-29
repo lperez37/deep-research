@@ -320,6 +320,15 @@ def test_intent_rank_avoids_unrelated_high_ranked_result():
     assert selected == [0, 2, 3]
 
 
+def test_business_search_keyword_focuses_requested_company_fields():
+    assert SearchFallback._business_search_keyword(
+        "Properize company product customers pricing address country ownership"
+    ) == "properize prijzen contact overname"
+    assert SearchFallback._business_search_keyword(
+        "latest quantum computing breakthroughs"
+    ) == "latest quantum computing breakthroughs"
+
+
 @respx.mock
 async def test_serp_internal_error_retries_once(fallback: SearchFallback):
     route = respx.post(

@@ -863,7 +863,7 @@ class SearchFallback:
 
     @staticmethod
     def _search_keyword(query: str, params: dict) -> str:
-        terms = [query]
+        terms = [SearchFallback._business_search_keyword(query)]
         terms.extend(f"site:{domain}" for domain in params.get("include_domains", []))
         terms.extend(f"-site:{domain}" for domain in params.get("exclude_domains", []))
         if params.get("start_date"):
@@ -876,6 +876,41 @@ class SearchFallback:
                 start = datetime.now(timezone.utc).date() - timedelta(days=days)
                 terms.append(f"after:{start.isoformat()}")
         return " ".join(terms)
+
+    @staticmethod
+    def _business_search_keyword(query: str) -> str:
+        """Focus broad company-dossier queries on high-value source pages."""
+        words = re.findall(r"[a-z0-9]+", query.casefold())
+        if not words:
+            return query
+        signals = {
+            "pricing": {"price", "prices", "pricing", "cost", "tarief", "prijzen"},
+            "address": {"address", "contact", "country", "location", "adres"},
+            "ownership": {
+                "owner", "ownership", "acquire", "acquired", "acquisition",
+                "overname", "parent",
+            },
+        }
+        requested = {
+            signal for signal, terms in signals.items() if set(words) & terms
+        }
+        if len(requested) < 2:
+            return query
+        generic = {
+            "business", "company", "details", "find", "information", "lookup",
+            "profile", "what",
+        } | set().union(*signals.values())
+        entity = next((word for word in words if word not in generic), None)
+        if not entity:
+            return query
+        focused = [entity]
+        if "pricing" in requested:
+            focused.append("prijzen")
+        if "address" in requested:
+            focused.append("contact")
+        if "ownership" in requested:
+            focused.append("overname")
+        return " ".join(focused)
 
     @staticmethod
     def _relative_days(params: dict) -> int | None:

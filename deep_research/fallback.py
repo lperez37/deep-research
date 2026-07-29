@@ -543,8 +543,7 @@ class SearchFallback:
         ]
         anchor_terms = {
             term for term in query_terms - intent_vocabulary
-            if 2 <= sum(term in text for text in candidate_texts)
-            <= max(2, len(candidates) // 2)
+            if sum(term in text for text in candidate_texts) >= 2
         }
         scored: list[tuple[int, float, set[str]]] = []
         for index, candidate in enumerate(candidates):

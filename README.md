@@ -21,16 +21,11 @@ deep-research is a [FastMCP](https://github.com/jlowin/fastmcp) server that expo
 Credit usage and attributed request events are tracked in SQLite. Every response includes the remaining credit budget so you can see consumption in real time.
 
 An optional fallback can keep search and extraction available after every
-Tavily key is exhausted or cooling down. For search, it collects 10
-Amsterdam-localized Google organic results from DataForSEO, uses a fast LLM to
-select the three most relevant and complementary URLs, fetches those pages
-concurrently as Markdown through a Jina Reader proxy, then produces a compact
-cross-source answer and per-source summaries with structured entity metadata.
-Raw page Markdown is never returned by fallback search, even when requested.
-Fallback extraction uses the same synthesis step instead of
-returning page Markdown: each URL gets at most an 800-character summary, with an
-8,000-character aggregate summary budget. Fallback responses identify
-themselves and include a cost breakdown.
+Tavily key is exhausted or cooling down. Search makes one bounded DataForSEO
+request and returns ranked Google organic snippets directly. Extraction fetches
+bounded page content directly through a Jina Reader proxy. There are no extra
+model calls or search-time page scrapes. Fallback responses identify themselves
+and include a cost breakdown.
 
 The fallback location is always Amsterdam. A `country` requested by the client
 is ignored only during fallback and is echoed in fallback metadata for clarity.
@@ -153,13 +148,9 @@ override is enabled.
 | `FALLBACK_ENABLED` | `false` | Enable the search/extract exhaustion fallback |
 | `DATAFORSEO_AUTH` | empty | Base64 DataForSEO `login:password` value |
 | `DATAFORSEO_LOCATION_NAME` | `Amsterdam,North Holland,Netherlands` | Google SERP location |
-| `FALLBACK_LLM_BASE_URL` | `https://router.vivacityholding.com/v1` | OpenAI-compatible synthesis URL |
-| `FALLBACK_LLM_API_KEY` | empty | Synthesis API key |
-| `FALLBACK_LLM_MODEL` | `deepseek-v4-flash` | Search-synthesis model |
 | `JINA_SCRAPER_BASE_URL` | `http://100.119.183.110:9567` | Jina Reader proxy URL |
-| `FALLBACK_CONTENT_MAX_CHARS` | `12000` | Maximum explicit raw/extract characters per source |
-| `FALLBACK_SEARCH_CONTENT_MAX_CHARS` | `1500` | Maximum Jina Markdown characters sent to synthesis per source |
-| `FALLBACK_EXTRACT_TOTAL_MAX_CHARS` | `6000` | Aggregate Jina content budget shared across extract synthesis inputs |
+| `FALLBACK_CONTENT_MAX_CHARS` | `12000` | Maximum returned Jina content characters per source |
+| `FALLBACK_EXTRACT_TOTAL_MAX_CHARS` | `6000` | Aggregate Jina content budget shared across extracted URLs |
 | `FALLBACK_DAILY_COST_LIMIT_USD` | `1.00` | Durable UTC daily fallback spending ceiling |
 | `FALLBACK_MAX_CONCURRENCY` | `2` | Maximum simultaneous fallback pipelines |
 | `FALLBACK_MAX_COST_PER_SEARCH_USD` | `0.02` | Reserved upper cost bound per search |

@@ -40,6 +40,21 @@ def test_stdio_remains_unauthenticated_by_default(monkeypatch) -> None:
     assert settings.auth_token == ""
 
 
+def test_fallback_requires_only_dataforseo_credentials() -> None:
+    settings = Settings(
+        tavily_api_keys="test-key",
+        fallback_enabled=True,
+        dataforseo_auth="configured-auth",
+    )
+
+    assert settings.fallback_enabled is True
+
+
+def test_fallback_rejects_missing_dataforseo_credentials() -> None:
+    with pytest.raises(ValidationError, match="DATAFORSEO_AUTH is missing"):
+        Settings(tavily_api_keys="test-key", fallback_enabled=True)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

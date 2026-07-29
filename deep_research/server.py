@@ -61,14 +61,8 @@ fallback = SearchFallback(
     dataforseo_auth=settings.dataforseo_auth,
     dataforseo_base_url=settings.dataforseo_base_url,
     location_name=settings.dataforseo_location_name,
-    llm_api_key=settings.fallback_llm_api_key,
-    llm_base_url=settings.fallback_llm_base_url,
-    llm_model=settings.fallback_llm_model,
-    llm_input_cost_per_million=settings.fallback_llm_input_cost_per_million,
-    llm_output_cost_per_million=settings.fallback_llm_output_cost_per_million,
     jina_base_url=settings.jina_scraper_base_url,
     content_max_chars=settings.fallback_content_max_chars,
-    search_content_max_chars=settings.fallback_search_content_max_chars,
     extract_total_max_chars=settings.fallback_extract_total_max_chars,
     tracker=tracker,
     daily_cost_limit_usd=settings.fallback_daily_cost_limit_usd,
@@ -149,7 +143,7 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
         if endpoint in {"search", "extract"} and settings.fallback_enabled:
             fallback_audit = {
                 "provider": (
-                    "dataforseo+llm+jina" if endpoint == "search" else "llm+jina"
+                    "dataforseo" if endpoint == "search" else "jina"
                 )
             }
             result = await _run_fallback(endpoint, params)

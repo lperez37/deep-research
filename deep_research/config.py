@@ -59,19 +59,13 @@ class Settings(BaseSettings):
     session_burst_limit: int = 5
     session_burst_window_seconds: float = 60.0
 
-    # Optional search fallback used only when every Tavily key is unavailable.
+    # Optional search/extract fallback used when every Tavily key is unavailable.
     fallback_enabled: bool = False
     dataforseo_auth: str = ""
     dataforseo_base_url: str = "https://api.dataforseo.com/v3"
     dataforseo_location_name: str = "Amsterdam,North Holland,Netherlands"
-    fallback_llm_base_url: str = "https://router.vivacityholding.com/v1"
-    fallback_llm_api_key: str = ""
-    fallback_llm_model: str = "deepseek-v4-flash"
-    fallback_llm_input_cost_per_million: float = 0.14
-    fallback_llm_output_cost_per_million: float = 0.28
     jina_scraper_base_url: str = "http://100.119.183.110:9567"
     fallback_content_max_chars: int = 12_000
-    fallback_search_content_max_chars: int = 1_500
     fallback_extract_total_max_chars: int = 6_000
     fallback_daily_cost_limit_usd: float = 1.0
     fallback_max_concurrency: int = 2
@@ -115,26 +109,9 @@ class Settings(BaseSettings):
         ):
             raise ValueError("SESSION_BURST_WINDOW_SECONDS must be greater than 0")
         if self.fallback_enabled:
-            missing = [
-                name
-                for name, value in (
-                    ("DATAFORSEO_AUTH", self.dataforseo_auth),
-                    ("FALLBACK_LLM_API_KEY", self.fallback_llm_api_key),
-                )
-                if not value
-            ]
-            if missing:
+            if not self.dataforseo_auth:
                 raise ValueError(
-                    "Fallback is enabled but required settings are missing: "
-                    + ", ".join(missing)
-                )
-            if self.fallback_search_content_max_chars < 500:
-                raise ValueError(
-                    "FALLBACK_SEARCH_CONTENT_MAX_CHARS must be at least 500"
-                )
-            if self.fallback_content_max_chars < self.fallback_search_content_max_chars:
-                raise ValueError(
-                    "FALLBACK_CONTENT_MAX_CHARS cannot be smaller than the search limit"
+                    "Fallback is enabled but DATAFORSEO_AUTH is missing"
                 )
             if self.fallback_extract_total_max_chars < 1_000:
                 raise ValueError(

@@ -22,7 +22,8 @@ Credit usage and attributed request events are tracked in SQLite. Every response
 
 An optional fallback can keep search and extraction available after every
 Tavily key is exhausted or cooling down. Search makes one bounded DataForSEO
-request and returns ranked Google organic snippets directly. Extraction fetches
+request, with one retry only for connection failures or zero-cost transient task
+errors, and returns ranked Google organic snippets directly. Extraction fetches
 bounded page content directly through a Jina Reader proxy. There are no extra
 model calls or search-time page scrapes. Fallback responses identify themselves
 and include a cost breakdown.
@@ -153,7 +154,7 @@ override is enabled.
 | `FALLBACK_EXTRACT_TOTAL_MAX_CHARS` | `6000` | Aggregate Jina content budget shared across extracted URLs |
 | `FALLBACK_DAILY_COST_LIMIT_USD` | `1.00` | Durable UTC daily fallback spending ceiling |
 | `FALLBACK_MAX_CONCURRENCY` | `2` | Maximum simultaneous fallback pipelines |
-| `FALLBACK_MAX_COST_PER_SEARCH_USD` | `0.02` | Reserved upper cost bound per search |
+| `FALLBACK_MAX_COST_PER_SEARCH_USD` | `0.02` | Reserved upper cost bound per search; higher estimated requests are rejected before submission |
 | `JINA_MAX_RESPONSE_BYTES` | `1100000` | Hard router-side Jina response byte limit |
 | `BIND_HOST` | `127.0.0.1` | Docker-published host address; use a Tailnet IP remotely |
 

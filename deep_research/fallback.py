@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import math
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
@@ -14,10 +16,27 @@ import httpx
 from deep_research.credits import CreditTracker
 
 
+class _DataForSEOResponseError(RuntimeError):
+    """Preserve provider-reported cost when a SERP task fails."""
+
+    def __init__(self, message: str, cost: float) -> None:
+        super().__init__(message)
+        self.cost = cost
+
+
 class SearchFallback:
     """Return provider results directly without a second research pipeline."""
 
     _SERP_PATH = "/serp/google/organic/live/advanced"
+    _SERP_ATTEMPTS = 2
+    _SERP_RETRY_DELAY_SECONDS = 0.25
+    _RETRYABLE_TASK_STATUS_CODES = frozenset({40101, 40103, 50000, 50301, 50401})
+    _SERP_PAGE_COST_USD = 0.002
+    _SEARCH_OPERATOR_PATTERN = re.compile(
+        r"(?<!\w)(?:allinanchor|allintext|allintitle|allinurl|cache|define|"
+        r"definition|filetype|id|inanchor|info|intext|intitle|inurl|link|site):",
+        re.IGNORECASE,
+    )
     _URL_MAX_CHARS = 2_048
 
     def __init__(
@@ -44,12 +63,13 @@ class SearchFallback:
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._cost_reservation_usd = max_cost_per_search_usd
         self._jina_max_response_bytes = jina_max_response_bytes
-        timeout = httpx.Timeout(12.0, connect=5.0)
         self._serp_http = httpx.AsyncClient(
-            base_url=dataforseo_base_url.rstrip("/"), timeout=timeout
+            base_url=dataforseo_base_url.rstrip("/"),
+            timeout=httpx.Timeout(30.0, connect=5.0),
         )
         self._jina_http = httpx.AsyncClient(
-            base_url=jina_base_url.rstrip("/"), timeout=timeout
+            base_url=jina_base_url.rstrip("/"),
+            timeout=httpx.Timeout(12.0, connect=5.0),
         )
 
     async def search(self, query: str, params: dict, reason: str) -> dict:
@@ -63,6 +83,12 @@ class SearchFallback:
             raise ValueError("Fallback supports at most 10 domain filters")
         if params.get("topic", "general") != "general":
             raise ValueError("Fallback supports only general web searches")
+        estimated_cost = self._estimated_serp_cost(query, params)
+        if estimated_cost > self._cost_reservation_usd + 1e-9:
+            raise ValueError(
+                f"Fallback search estimated DataForSEO cost ${estimated_cost:.3f} "
+                f"exceeds the configured ${self._cost_reservation_usd:.3f} ceiling"
+            )
 
         reservation_day = self._tracker.reserve_fallback_cost(
             self._cost_reservation_usd, self._daily_cost_limit_usd
@@ -75,6 +101,9 @@ class SearchFallback:
         try:
             async with self._semaphore:
                 results, actual_cost = await self._search_results(query, params)
+        except _DataForSEOResponseError as exc:
+            actual_cost = exc.cost
+            raise
         finally:
             # Failed and cancelled requests must not consume their full reservation.
             self._tracker.settle_fallback_cost(
@@ -122,32 +151,79 @@ class SearchFallback:
             "language_code": "en",
             "device": "desktop",
             "os": "windows",
-            "depth": max(10, max_results * 2),
+            "depth": self._serp_depth(max_results),
         }]
-        response = await self._serp_http.post(
-            self._SERP_PATH,
-            json=payload,
-            headers={"Authorization": f"Basic {self._dataforseo_auth}"},
-        )
-        response.raise_for_status()
-        tasks = response.json().get("tasks") or []
-        task = tasks[0] if tasks else {}
-        cost = float(task.get("cost") or 0.0)
-        if task.get("status_code") != 20000:
-            message = task.get("status_message") or "missing task"
-            if "no search results" in message.casefold():
-                return [], cost
-            raise RuntimeError(f"DataForSEO SERP request failed: {message}")
+        total_cost = 0.0
+        for attempt in range(self._SERP_ATTEMPTS):
+            try:
+                response = await self._serp_http.post(
+                    self._SERP_PATH,
+                    json=payload,
+                    headers={"Authorization": f"Basic {self._dataforseo_auth}"},
+                )
+                response.raise_for_status()
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if attempt == 0:
+                    await asyncio.sleep(self._SERP_RETRY_DELAY_SECONDS)
+                    continue
+                raise
 
-        provider_results = (task.get("result") or [{}])[0].get("items") or []
+            tasks = response.json().get("tasks") or []
+            task = tasks[0] if tasks else {}
+            total_cost += float(task.get("cost") or 0.0)
+            status = task.get("status_code")
+            if status == 20000:
+                break
+
+            message = task.get("status_message") or "missing task"
+            if status == 40102:
+                return [], total_cost
+            if (
+                attempt == 0
+                and total_cost == 0.0
+                and status in self._RETRYABLE_TASK_STATUS_CODES
+            ):
+                await asyncio.sleep(self._SERP_RETRY_DELAY_SECONDS)
+                continue
+            raise _DataForSEOResponseError(
+                f"DataForSEO SERP request failed: {message}", total_cost
+            )
+        else:  # pragma: no cover - every final attempt returns or raises
+            raise RuntimeError("DataForSEO SERP request exhausted retries")
+
+        task_results = task.get("result")
+        if (
+            not isinstance(task_results, list)
+            or not task_results
+            or not isinstance(task_results[0], dict)
+        ):
+            raise _DataForSEOResponseError(
+                "DataForSEO SERP returned an invalid result", total_cost
+            )
+        provider_results = task_results[0].get("items")
+        if not isinstance(provider_results, list):
+            raise _DataForSEOResponseError(
+                "DataForSEO SERP returned an invalid result", total_cost
+            )
         includes = params.get("include_domains", [])
         excludes = params.get("exclude_domains", [])
         results: list[dict] = []
         seen_urls: set[str] = set()
         for item in provider_results:
-            if item.get("type") != "organic" or not item.get("url"):
+            if not isinstance(item, dict):
+                raise _DataForSEOResponseError(
+                    "DataForSEO SERP returned an invalid result", total_cost
+                )
+            if item.get("type") != "organic":
                 continue
-            url = self._safe_url(item["url"])
+            raw_url = item.get("url")
+            if not raw_url:
+                continue
+            if not isinstance(raw_url, str):
+                raise _DataForSEOResponseError(
+                    "DataForSEO SERP returned an invalid result", total_cost
+                )
+            url = self._safe_url(raw_url)
             if not url or url in seen_urls:
                 continue
             hostname = (urlsplit(url).hostname or "").lower()
@@ -169,7 +245,7 @@ class SearchFallback:
             })
             if len(results) == max_results:
                 break
-        return results, cost
+        return results, total_cost
 
     async def extract(self, urls: list[str], params: dict, reason: str) -> dict:
         """Return bounded Jina content directly, without LLM synthesis."""
@@ -251,6 +327,18 @@ class SearchFallback:
         if not isinstance(body, dict):
             raise RuntimeError("Jina returned an invalid response")
         return body
+
+    @staticmethod
+    def _serp_depth(max_results: int) -> int:
+        return max(10, max_results * 2)
+
+    @classmethod
+    def _estimated_serp_cost(cls, query: str, params: dict) -> float:
+        max_results = min(params.get("max_results", 5), 20)
+        pages = math.ceil(cls._serp_depth(max_results) / 10)
+        keyword = cls._search_keyword(query, params)
+        multiplier = 5 if cls._SEARCH_OPERATOR_PATTERN.search(keyword) else 1
+        return pages * cls._SERP_PAGE_COST_USD * multiplier
 
     @staticmethod
     def _search_keyword(query: str, params: dict) -> str:

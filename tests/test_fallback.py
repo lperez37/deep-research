@@ -122,7 +122,7 @@ async def test_no_serp_results_is_an_empty_success(fallback: SearchFallback):
     respx.post(
         "https://dataforseo.test/v3/serp/google/organic/live/advanced"
     ).mock(return_value=httpx.Response(200, json={"tasks": [{
-        "status_code": 40101,
+        "status_code": 40102,
         "status_message": "No Search Results.",
         "cost": 0.002,
     }]}))
@@ -134,36 +134,141 @@ async def test_no_serp_results_is_an_empty_success(fallback: SearchFallback):
 
 
 @respx.mock
-async def test_provider_error_does_not_leak_cost_reservation(
+async def test_provider_error_settles_reported_cost(
     fallback: SearchFallback,
 ):
     respx.post(
         "https://dataforseo.test/v3/serp/google/organic/live/advanced"
     ).mock(return_value=httpx.Response(200, json={"tasks": [{
         "status_code": 50000,
-        "status_message": "Internal SE Server Error.",
-        "cost": 0,
+        "status_message": "Internal Error.",
+        "cost": 0.001,
     }]}))
 
-    with pytest.raises(RuntimeError, match="Internal SE Server Error"):
+    with pytest.raises(RuntimeError, match="Internal Error"):
         await fallback.search("query", {}, "keys exhausted")
 
-    assert fallback._tracker.get_fallback_spend() == 0.0
+    assert fallback._tracker.get_fallback_spend() == 0.001
+
+
+@pytest.mark.parametrize("status_code", [40101, 40103, 50000, 50301, 50401])
+@respx.mock
+async def test_search_retries_zero_cost_transient_provider_error(
+    fallback: SearchFallback,
+    status_code: int,
+):
+    route = respx.post(
+        "https://dataforseo.test/v3/serp/google/organic/live/advanced"
+    ).mock(side_effect=[
+        httpx.Response(200, json={"tasks": [{
+            "status_code": status_code,
+            "status_message": "Transient provider error.",
+            "cost": 0,
+        }]}),
+        httpx.Response(200, json=_serp_response()),
+    ])
+
+    result = await fallback.search("query", {}, "keys exhausted")
+
+    assert route.call_count == 2
+    assert len(result["results"]) == 5
+    assert result["_fallback"]["cost_usd"]["total"] == 0.002
 
 
 @respx.mock
-async def test_search_does_not_retry_provider_error(fallback: SearchFallback):
+async def test_search_does_not_retry_read_timeout(fallback: SearchFallback):
     route = respx.post(
         "https://dataforseo.test/v3/serp/google/organic/live/advanced"
-    ).mock(return_value=httpx.Response(200, json={"tasks": [{
-        "status_code": 50000,
-        "status_message": "Internal SE Server Error.",
-    }]}))
+    ).mock(side_effect=httpx.ReadTimeout(
+        "DataForSEO response exceeded the read timeout"
+    ))
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(httpx.ReadTimeout):
         await fallback.search("query", {}, "keys exhausted")
 
     assert route.call_count == 1
+
+
+@respx.mock
+async def test_search_retries_connect_timeout(fallback: SearchFallback):
+    route = respx.post(
+        "https://dataforseo.test/v3/serp/google/organic/live/advanced"
+    ).mock(side_effect=[
+        httpx.ConnectTimeout("DataForSEO connection timed out"),
+        httpx.Response(200, json=_serp_response()),
+    ])
+
+    result = await fallback.search("query", {}, "keys exhausted")
+
+    assert route.call_count == 2
+    assert len(result["results"]) == 5
+
+
+@pytest.mark.parametrize("status_code", [40501, 50100, 50303])
+@respx.mock
+async def test_search_does_not_retry_permanent_provider_error(
+    fallback: SearchFallback,
+    status_code: int,
+):
+    route = respx.post(
+        "https://dataforseo.test/v3/serp/google/organic/live/advanced"
+    ).mock(return_value=httpx.Response(200, json={"tasks": [{
+        "status_code": status_code,
+        "status_message": "Invalid Field.",
+    }]}))
+
+    with pytest.raises(RuntimeError, match="Invalid Field"):
+        await fallback.search("query", {}, "keys exhausted")
+
+    assert route.call_count == 1
+
+
+def test_dataforseo_has_longer_timeout_than_jina(fallback: SearchFallback):
+    assert fallback._serp_http.timeout.read == 30.0
+    assert fallback._jina_http.timeout.read == 12.0
+
+
+@respx.mock
+async def test_search_rejects_estimated_cost_above_configured_ceiling(
+    fallback: SearchFallback,
+):
+    route = respx.post(
+        "https://dataforseo.test/v3/serp/google/organic/live/advanced"
+    ).mock(return_value=httpx.Response(200, json=_serp_response()))
+
+    with pytest.raises(ValueError, match="estimated DataForSEO cost"):
+        await fallback.search(
+            "query",
+            {"max_results": 20, "include_domains": ["example.com"]},
+            "keys exhausted",
+        )
+
+    assert route.call_count == 0
+    assert fallback._tracker.get_fallback_spend() == 0.0
+
+
+@pytest.mark.parametrize("items", [["not-an-object"], [{
+    "type": "organic",
+    "url": 123,
+}]])
+@respx.mock
+async def test_malformed_success_response_settles_reported_cost(
+    fallback: SearchFallback,
+    items: list,
+):
+    respx.post(
+        "https://dataforseo.test/v3/serp/google/organic/live/advanced"
+    ).mock(return_value=httpx.Response(200, json={"tasks": [{
+        "status_code": 20000,
+        "status_message": "Ok.",
+        "cost": 0.002,
+        "result": [{"items": items}],
+    }]}))
+
+    with pytest.raises(RuntimeError, match="invalid result"):
+        await fallback.search("query", {}, "keys exhausted")
+
+    assert fallback._tracker.get_fallback_spend() == 0.002
 
 
 @respx.mock

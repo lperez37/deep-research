@@ -461,7 +461,7 @@ class SearchFallback:
                 "/chat/completions",
                 headers={"Authorization": f"Bearer {self._llm_api_key}"},
                 json=request,
-                timeout=10.0,
+                timeout=4.0,
             )
             response.raise_for_status()
             body = response.json()
@@ -491,7 +491,8 @@ class SearchFallback:
             method = "google_rank_after_llm_error"
 
         if selected_indices is None:
-            selected_indices = list(range(min(self._RESULT_COUNT, len(candidates))))
+            selected_indices = self._rank_candidate_indices(query, candidates)
+            method = method.replace("google_rank", "intent_rank")
         usage = {
             **usage,
             "prompt_tokens": self._usage_count(usage.get("prompt_tokens")),
@@ -506,6 +507,62 @@ class SearchFallback:
             cost_source,
             method,
         )
+
+    @classmethod
+    def _rank_candidate_indices(
+        cls, query: str, candidates: list[SearchCandidate]
+    ) -> list[int]:
+        """Select relevant, complementary sources without another network call."""
+        stopwords = {
+            "about", "and", "company", "for", "from", "information", "the",
+            "their", "what", "where", "with",
+        }
+        query_terms = {
+            term for term in re.findall(r"[a-z0-9]+", query.casefold())
+            if len(term) >= 3 and term not in stopwords
+        }
+        intent_terms = {
+            "pricing": {"price", "prices", "pricing", "prijzen", "tarief", "cost"},
+            "address": {"address", "contact", "location", "country", "adres"},
+            "ownership": {
+                "owner", "ownership", "acquire", "acquired", "acquires",
+                "acquisition",
+                "overname", "parent",
+            },
+            "customers": {"customer", "customers", "client", "clients", "klant"},
+            "product": {"product", "platform", "service", "software", "solution"},
+        }
+        requested_intents = {
+            intent for intent, terms in intent_terms.items()
+            if query_terms & terms
+        }
+        scored: list[tuple[int, float, set[str]]] = []
+        for index, candidate in enumerate(candidates):
+            title_url = f"{candidate.title} {candidate.url}".casefold()
+            haystack = f"{title_url} {candidate.description}".casefold()
+            term_hits = sum(term in haystack for term in query_terms)
+            prominent_hits = sum(term in title_url for term in query_terms)
+            covered = {
+                intent for intent in requested_intents
+                if any(term in haystack for term in intent_terms[intent])
+            }
+            score = term_hits * 2 + prominent_hits + 1 / max(candidate.rank, 1)
+            scored.append((index, score, covered))
+
+        selected: list[int] = []
+        covered_intents: set[str] = set()
+        while scored and len(selected) < min(cls._RESULT_COUNT, len(candidates)):
+            best = max(
+                scored,
+                key=lambda item: (
+                    item[1] + 4 * len(item[2] - covered_intents),
+                    -candidates[item[0]].rank,
+                ),
+            )
+            scored.remove(best)
+            selected.append(best[0])
+            covered_intents.update(best[2])
+        return selected
 
     async def _synthesize(
         self,

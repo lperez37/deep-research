@@ -9,7 +9,7 @@ import pytest
 import respx
 
 from deep_research.credits import CreditTracker
-from deep_research.fallback import SearchFallback
+from deep_research.fallback import SearchCandidate, SearchFallback
 
 
 @pytest.fixture
@@ -283,6 +283,41 @@ def test_safe_url_rejects_internal_targets():
         SearchFallback._safe_url("https://example.com/article#section")
         == "https://example.com/article"
     )
+
+
+def test_intent_rank_avoids_unrelated_high_ranked_result():
+    candidates = [
+        SearchCandidate(
+            "Properize tenant screening",
+            "https://properize.com/",
+            "Tenant screening product for rental agents and customers",
+            1,
+        ),
+        SearchCandidate(
+            "Commercial property prices",
+            "https://cbs.example/property-prices",
+            "Statistics about commercial property prices",
+            2,
+        ),
+        SearchCandidate(
+            "Contact Properize",
+            "https://properize.com/contact/",
+            "Company address and contact details",
+            5,
+        ),
+        SearchCandidate(
+            "TreeHouse acquires Properize",
+            "https://news.example/treehouse-acquires-properize/",
+            "Acquisition and ownership news",
+            7,
+        ),
+    ]
+
+    selected = SearchFallback._rank_candidate_indices(
+        "Properize product customers address country ownership", candidates
+    )
+
+    assert selected == [0, 2, 3]
 
 
 @respx.mock

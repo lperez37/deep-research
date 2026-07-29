@@ -469,11 +469,12 @@ class SearchFallback:
                 raise TypeError
             raw_usage = body.get("usage")
             usage = raw_usage if isinstance(raw_usage, dict) else {}
-            parsed = json.loads(body["choices"][0]["message"]["content"])
+            parsed = self._json_object(body["choices"][0]["message"]["content"])
             raw_indices = parsed.get("selected") if isinstance(parsed, dict) else None
             if isinstance(raw_indices, list):
                 selected_indices = []
-                for index in raw_indices:
+                for item in raw_indices:
+                    index = item.get("index") if isinstance(item, dict) else item
                     if (
                         isinstance(index, int)
                         and not isinstance(index, bool)
@@ -586,7 +587,7 @@ class SearchFallback:
                 raw_usage = body.get("usage")
                 usage = raw_usage if isinstance(raw_usage, dict) else {}
                 content = body["choices"][0]["message"]["content"]
-                parsed = json.loads(content)
+                parsed = self._json_object(content)
                 if not isinstance(parsed, dict):
                     raise TypeError
                 synthesized = parsed
@@ -643,6 +644,23 @@ class SearchFallback:
         except (TypeError, ValueError, OverflowError):
             return 0
         return max(0, count)
+
+    @staticmethod
+    def _json_object(content: object) -> dict:
+        """Parse a JSON object, tolerating model-added prose or code fences."""
+        if not isinstance(content, str):
+            raise TypeError("LLM content is not text")
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            start = content.find("{")
+            end = content.rfind("}")
+            if start < 0 or end <= start:
+                raise
+            parsed = json.loads(content[start:end + 1])
+        if not isinstance(parsed, dict):
+            raise TypeError("LLM content is not a JSON object")
+        return parsed
 
     def _llm_cost(self, usage: dict) -> tuple[float, str]:
         """Return provider-reported cost or estimate it from normalized usage."""

@@ -89,7 +89,11 @@ async def test_search_scrapes_and_synthesizes_three_sources(fallback: SearchFall
     llm_route = respx.post("https://llm.test/v1/chat/completions").mock(
         side_effect=[
             httpx.Response(200, json={
-                "choices": [{"message": {"content": '{"selected":[0,2,5]}'}}],
+                "choices": [{"message": {"content": (
+                    "Selected sources:\n```json\n"
+                    '{"selected":[{"index":0},{"index":2},{"index":5}]}'
+                    "\n```"
+                )}}],
                 "usage": {
                     "prompt_tokens": 100,
                     "completion_tokens": 10,

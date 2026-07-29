@@ -420,7 +420,7 @@ class SearchFallback:
             "model": self._llm_model,
             "temperature": 0,
             "thinking": {"type": "disabled"},
-            "max_tokens": 300,
+            "max_tokens": 500,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -461,7 +461,7 @@ class SearchFallback:
                 "/chat/completions",
                 headers={"Authorization": f"Bearer {self._llm_api_key}"},
                 json=request,
-                timeout=6.0,
+                timeout=10.0,
             )
             response.raise_for_status()
             body = response.json()

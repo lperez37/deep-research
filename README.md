@@ -20,12 +20,16 @@ deep-research is a [FastMCP](https://github.com/jlowin/fastmcp) server that expo
 
 Credit usage and attributed request events are tracked in SQLite. Every response includes the remaining credit budget so you can see consumption in real time.
 
-An optional search-only fallback can keep search available after every Tavily
-key is exhausted or cooling down. It collects 10 Amsterdam-localized Google
-organic results through DataForSEO, uses a fast LLM to select up to 3 genuinely
-relevant sources, and fetches those pages concurrently as Markdown through a
-Jina Reader proxy. Fallback responses identify themselves and include a cost
-breakdown.
+An optional fallback can keep search and extraction available after every
+Tavily key is exhausted or cooling down. For search, it takes the top 3
+Amsterdam-localized Google organic results from DataForSEO, fetches those pages
+concurrently as Markdown through a Jina Reader proxy, then uses a fast LLM to
+produce a compact cross-source answer and per-source summaries with structured
+entity metadata. Raw page Markdown is never returned by fallback search, even
+when requested. Fallback extraction uses the same synthesis step instead of
+returning page Markdown: each URL gets at most a 600-character summary, with a
+6,000-character aggregate summary budget. Fallback responses identify
+themselves and include a cost breakdown.
 
 The fallback location is always Amsterdam. A `country` requested by the client
 is ignored only during fallback and is echoed in fallback metadata for clarity.
@@ -145,16 +149,16 @@ override is enabled.
 | `AUDIT_BUSY_TIMEOUT_SECONDS` | `0.1` | Maximum SQLite lock wait for request audit writes |
 | `SESSION_BURST_LIMIT` | `5` | Metered calls allowed per MCP session window (`0` disables) |
 | `SESSION_BURST_WINDOW_SECONDS` | `60` | Rolling session burst window in seconds |
-| `FALLBACK_ENABLED` | `false` | Enable the search-only exhaustion fallback |
+| `FALLBACK_ENABLED` | `false` | Enable the search/extract exhaustion fallback |
 | `DATAFORSEO_AUTH` | empty | Base64 DataForSEO `login:password` value |
 | `DATAFORSEO_LOCATION_NAME` | `Amsterdam,North Holland,Netherlands` | Google SERP location |
-| `FALLBACK_LLM_BASE_URL` | `https://router.vivacityholding.com/v1` | OpenAI-compatible selector URL |
-| `FALLBACK_LLM_API_KEY` | empty | Source-selection API key |
-| `FALLBACK_LLM_MODEL` | `deepseek-v4-flash` | Relevance-selection model |
+| `FALLBACK_LLM_BASE_URL` | `https://router.vivacityholding.com/v1` | OpenAI-compatible synthesis URL |
+| `FALLBACK_LLM_API_KEY` | empty | Synthesis API key |
+| `FALLBACK_LLM_MODEL` | `deepseek-v4-flash` | Search-synthesis model |
 | `JINA_SCRAPER_BASE_URL` | `http://100.119.183.110:9567` | Jina Reader proxy URL |
 | `FALLBACK_CONTENT_MAX_CHARS` | `12000` | Maximum explicit raw/extract characters per source |
-| `FALLBACK_SEARCH_CONTENT_MAX_CHARS` | `3000` | Maximum normal search-result characters per source |
-| `FALLBACK_EXTRACT_TOTAL_MAX_CHARS` | `24000` | Aggregate character budget shared across extracted URLs |
+| `FALLBACK_SEARCH_CONTENT_MAX_CHARS` | `3000` | Maximum Jina Markdown characters sent to synthesis per source |
+| `FALLBACK_EXTRACT_TOTAL_MAX_CHARS` | `24000` | Aggregate Jina content budget shared across extract synthesis inputs |
 | `FALLBACK_DAILY_COST_LIMIT_USD` | `1.00` | Durable UTC daily fallback spending ceiling |
 | `FALLBACK_MAX_CONCURRENCY` | `2` | Maximum simultaneous fallback pipelines |
 | `FALLBACK_MAX_COST_PER_SEARCH_USD` | `0.02` | Reserved upper cost bound per search |

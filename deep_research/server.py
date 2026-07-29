@@ -148,7 +148,9 @@ async def _route_request(endpoint: str, params: dict, ctx: Context) -> dict:
 
         if endpoint in {"search", "extract"} and settings.fallback_enabled:
             fallback_audit = {
-                "provider": "dataforseo+llm+jina" if endpoint == "search" else "jina"
+                "provider": (
+                    "dataforseo+llm+jina" if endpoint == "search" else "llm+jina"
+                )
             }
             result = await _run_fallback(endpoint, params)
             fallback_audit.update(_fallback_audit_metadata(endpoint, result))

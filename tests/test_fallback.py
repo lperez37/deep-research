@@ -60,19 +60,36 @@ def _serp_response(count: int = 10) -> dict:
     }
 
 
+def _synthesis_response(count: int = 3) -> dict:
+    return {
+        "answer": "The sources agree on the main answer.",
+        "sources": [
+            {
+                "index": index,
+                "summary": f"Compact summary {index}",
+                "metadata": {
+                    "entity_type": "business",
+                    "name": f"Business {index}",
+                    "street_address": f"{index} Main Street",
+                    "country": "Netherlands",
+                    "key_facts": [f"Fact {index}"],
+                    "unsupported_field": "discard me",
+                },
+            }
+            for index in range(count)
+        ],
+    }
+
+
 @respx.mock
-async def test_search_selects_and_scrapes_three_sources(fallback: SearchFallback):
+async def test_search_scrapes_and_synthesizes_three_sources(fallback: SearchFallback):
     serp_route = respx.post(
         "https://dataforseo.test/v3/serp/google/organic/live/advanced"
     ).mock(return_value=httpx.Response(200, json=_serp_response()))
     llm_route = respx.post("https://llm.test/v1/chat/completions").mock(
         return_value=httpx.Response(200, json={
             "choices": [{"message": {"content": json.dumps({
-                "selected": [
-                    {"index": 0, "score": 0.98},
-                    {"index": 2, "score": 0.91},
-                    {"index": 5, "score": 0.84},
-                ]
+                **_synthesis_response(),
             })}}],
             "usage": {
                 "prompt_tokens": 500,
@@ -94,31 +111,47 @@ async def test_search_selects_and_scrapes_three_sources(fallback: SearchFallback
         side_effect=jina_response
     )
 
-    result = await fallback.search("useful query", {}, "keys exhausted")
+    result = await fallback.search(
+        "useful query", {"include_raw_content": True}, "keys exhausted"
+    )
 
-    assert [item["score"] for item in result["results"]] == [0.98, 0.91, 0.84]
-    assert all(item["content"] == "# Useful s" for item in result["results"])
+    assert [item["score"] for item in result["results"]] == [1.0, 0.95, 0.9]
+    assert [item["content"] for item in result["results"]] == [
+        "Compact summary 0", "Compact summary 1", "Compact summary 2"
+    ]
+    assert result["answer"] == "The sources agree on the main answer."
+    assert result["results"][0]["metadata"] == {
+        "entity_type": "business",
+        "name": "Business 0",
+        "street_address": "0 Main Street",
+        "country": "Netherlands",
+        "key_facts": ["Fact 0"],
+    }
     assert all("raw_content" not in item for item in result["results"])
     assert jina_route.call_count == 3
-    assert result["_fallback"]["serp_candidates"] == 10
+    assert result["_fallback"]["serp_candidates"] == 3
     assert result["_fallback"]["sources_returned"] == 3
-    assert result["_fallback"]["content_limit_chars"] == 10
-    assert result["_fallback"]["raw_content_limit_chars"] == 20
+    assert result["_fallback"]["synthesis_input_limit_chars_per_source"] == 10
+    assert result["_fallback"]["summary_limit_chars"] == 1200
+    assert result["_fallback"]["raw_content_requested_but_omitted"] is True
     assert result["_fallback"]["cost_usd"] == {
         "dataforseo_serp": 0.002,
-        "llm_relevance_selection": 0.000084,
+        "llm_synthesis": 0.000084,
         "jina_scraping": 0.0,
         "total": 0.002084,
     }
 
     serp_payload = json.loads(serp_route.calls.last.request.content)[0]
-    assert serp_payload["depth"] == 20
+    assert serp_payload["depth"] == 10
     assert serp_payload["location_name"] == "Amsterdam,North Holland,Netherlands"
     llm_payload = json.loads(llm_route.calls.last.request.content)
-    assert len(json.loads(llm_payload["messages"][1]["content"])["candidates"]) == 10
+    llm_sources = json.loads(llm_payload["messages"][1]["content"])["sources"]
+    assert len(llm_sources) == 3
+    assert all(len(source["markdown"]) == 10 for source in llm_sources)
     assert llm_payload["thinking"] == {"type": "disabled"}
-    assert llm_payload["max_tokens"] == 500
-    assert result["_fallback"]["selection_method"] == "llm"
+    assert llm_payload["max_tokens"] == 1800
+    assert result["_fallback"]["source_selection_method"] == "google_rank"
+    assert result["_fallback"]["synthesis_method"] == "llm"
 
 
 @respx.mock
@@ -130,9 +163,12 @@ async def test_search_ignores_country_and_reports_amsterdam_location(
     ).mock(return_value=httpx.Response(200, json=_serp_response()))
     respx.post("https://llm.test/v1/chat/completions").mock(
         return_value=httpx.Response(200, json={
-            "choices": [{"message": {"content": '{"selected":[]}'}}],
+            "choices": [{"message": {"content": '{}'}}],
             "usage": {},
         })
+    )
+    respx.post("http://jina.test/process").mock(
+        return_value=httpx.Response(200, json={"markdown": "valid"})
     )
 
     result = await fallback.search(
@@ -148,16 +184,11 @@ async def test_search_ignores_country_and_reports_amsterdam_location(
 
 
 @respx.mock
-async def test_no_relevant_sources_skips_jina(fallback: SearchFallback):
+async def test_no_serp_sources_skips_jina_and_llm(fallback: SearchFallback):
     respx.post(
         "https://dataforseo.test/v3/serp/google/organic/live/advanced"
-    ).mock(return_value=httpx.Response(200, json=_serp_response()))
-    respx.post("https://llm.test/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={
-            "choices": [{"message": {"content": '{"selected":[]}'}}],
-            "usage": {"prompt_tokens": 100, "completion_tokens": 5},
-        })
-    )
+    ).mock(return_value=httpx.Response(200, json=_serp_response(0)))
+    llm_route = respx.post("https://llm.test/v1/chat/completions")
     jina_route = respx.post("http://jina.test/process")
 
     result = await fallback.search("unanswerable query", {}, "keys exhausted")
@@ -165,6 +196,7 @@ async def test_no_relevant_sources_skips_jina(fallback: SearchFallback):
     assert result["results"] == []
     assert result["_fallback"]["sources_selected"] == 0
     assert not jina_route.called
+    assert not llm_route.called
 
 
 @respx.mock
@@ -176,12 +208,7 @@ async def test_failed_scrape_does_not_discard_other_results(
     ).mock(return_value=httpx.Response(200, json=_serp_response()))
     respx.post("https://llm.test/v1/chat/completions").mock(
         return_value=httpx.Response(200, json={
-            "choices": [{"message": {"content": json.dumps({
-                "selected": [
-                    {"index": 0, "score": 0.9},
-                    {"index": 1, "score": 0.8},
-                ]
-            })}}],
+            "choices": [{"message": {"content": '{}'}}],
             "usage": {},
         })
     )
@@ -199,7 +226,7 @@ async def test_failed_scrape_does_not_discard_other_results(
 
     result = await fallback.search("query", {}, "keys exhausted")
 
-    assert len(result["results"]) == 1
+    assert len(result["results"]) == 2
     assert result["_fallback"]["scrape_failures"] == 1
 
 
@@ -210,9 +237,7 @@ async def test_all_scrapes_failed_raises(fallback: SearchFallback):
     ).mock(return_value=httpx.Response(200, json=_serp_response()))
     respx.post("https://llm.test/v1/chat/completions").mock(
         return_value=httpx.Response(200, json={
-            "choices": [{"message": {"content": (
-                '{"selected":[{"index":0,"score":0.9}]}'
-            )}}],
+            "choices": [{"message": {"content": '{}'}}],
             "usage": {},
         })
     )
@@ -220,7 +245,7 @@ async def test_all_scrapes_failed_raises(fallback: SearchFallback):
         return_value=httpx.Response(503, text="unavailable")
     )
 
-    with pytest.raises(RuntimeError, match="every selected source"):
+    with pytest.raises(RuntimeError, match="every SERP source"):
         await fallback.search("query", {}, "keys exhausted")
 
 
@@ -228,6 +253,8 @@ def test_safe_url_rejects_internal_targets():
     assert SearchFallback._safe_url("http://127.0.0.1/admin") is None
     assert SearchFallback._safe_url("http://localhost/admin") is None
     assert SearchFallback._safe_url("file:///etc/passwd") is None
+    assert SearchFallback._safe_url("https://example.com:8443/admin") is None
+    assert SearchFallback._safe_url("https://example.com/" + "x" * 2100) is None
     assert (
         SearchFallback._safe_url("https://example.com/article#section")
         == "https://example.com/article"
@@ -248,9 +275,12 @@ async def test_serp_internal_error_retries_once(fallback: SearchFallback):
     ])
     respx.post("https://llm.test/v1/chat/completions").mock(
         return_value=httpx.Response(200, json={
-            "choices": [{"message": {"content": '{"selected":[]}'}}],
+            "choices": [{"message": {"content": '{}'}}],
             "usage": {},
         })
+    )
+    respx.post("http://jina.test/process").mock(
+        return_value=httpx.Response(200, json={"markdown": "valid"})
     )
 
     result = await fallback.search("query", {}, "keys exhausted")
@@ -275,9 +305,12 @@ async def test_serp_no_results_retries_without_domain_token(
     ])
     respx.post("https://llm.test/v1/chat/completions").mock(
         return_value=httpx.Response(200, json={
-            "choices": [{"message": {"content": '{"selected":[]}'}}],
+            "choices": [{"message": {"content": '{}'}}],
             "usage": {},
         })
+    )
+    respx.post("http://jina.test/process").mock(
+        return_value=httpx.Response(200, json={"markdown": "valid"})
     )
 
     result = await fallback.search(
@@ -312,7 +345,7 @@ async def test_repeated_serp_no_results_returns_empty_success(
 
 
 @respx.mock
-async def test_null_llm_content_uses_google_rank_without_retry(
+async def test_null_llm_content_uses_serp_snippets_without_retry(
     fallback: SearchFallback,
 ):
     respx.post(
@@ -333,10 +366,47 @@ async def test_null_llm_content_uses_google_rank_without_retry(
     assert llm_route.call_count == 1
     assert len(result["results"]) == 3
     assert result["_fallback"]["llm"]["total_tokens"] == 500
-    assert result["_fallback"]["cost_usd"]["llm_relevance_selection"] == 0.0001
-    assert result["_fallback"]["selection_method"] == (
-        "google_rank_after_invalid_llm"
+    assert result["_fallback"]["cost_usd"]["llm_synthesis"] == 0.0001
+    assert result["_fallback"]["synthesis_method"] == (
+        "serp_snippet_after_invalid_llm"
     )
+    assert result["results"][0]["content"] == "Snippet 0"
+
+
+@respx.mock
+async def test_partial_synthesis_uses_snippets_and_omits_aggregate_answer(
+    fallback: SearchFallback,
+):
+    respx.post(
+        "https://dataforseo.test/v3/serp/google/organic/live/advanced"
+    ).mock(return_value=httpx.Response(200, json=_serp_response()))
+    respx.post("http://jina.test/process").mock(
+        return_value=httpx.Response(200, json={"markdown": "valid"})
+    )
+    respx.post("https://llm.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps({
+                "answer": "Do not trust this incomplete answer.",
+                "sources": [{
+                    "index": 0,
+                    "summary": "Only one source was summarized.",
+                    "metadata": {"entity_type": "invalid-type"},
+                }],
+            })}}],
+            "usage": "malformed",
+        })
+    )
+
+    result = await fallback.search("query", {}, "keys exhausted")
+
+    assert result["answer"] is None
+    assert result["results"][0]["content"] == "Only one source was summarized."
+    assert result["results"][0]["metadata"] == {}
+    assert result["results"][1]["content"] == "Snippet 1"
+    assert result["_fallback"]["synthesis_method"] == (
+        "llm_with_serp_snippet_fallback"
+    )
+    assert result["_fallback"]["llm"]["total_tokens"] == 0
 
 
 @respx.mock
@@ -353,6 +423,14 @@ async def test_extract_uses_jina_and_returns_partial_failures(
         })
 
     route = respx.post("http://jina.test/process").mock(side_effect=jina_response)
+    respx.post("https://llm.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps(
+                _synthesis_response(1)
+            )}}],
+            "usage": {},
+        })
+    )
     urls = [
         "https://good.example/page",
         "https://blocked.example/page",
@@ -368,7 +446,14 @@ async def test_extract_uses_jina_and_returns_partial_failures(
     assert route.call_count == 2
     assert result["results"] == [{
         "url": "https://good.example/page",
-        "raw_content": "# Extracted Markdown",
+        "raw_content": "Compact summary 0",
+        "metadata": {
+            "entity_type": "business",
+            "name": "Business 0",
+            "street_address": "0 Main Street",
+            "country": "Netherlands",
+            "key_facts": ["Fact 0"],
+        },
         "images": [],
     }]
     assert len(result["failed_results"]) == 2
@@ -377,11 +462,19 @@ async def test_extract_uses_jina_and_returns_partial_failures(
 
 
 @respx.mock
-async def test_extract_text_format_uses_jina_content(fallback: SearchFallback):
+async def test_extract_text_format_is_summarized(fallback: SearchFallback):
     respx.post("http://jina.test/process").mock(
         return_value=httpx.Response(200, json={
             "markdown": "# Markdown",
             "content": "Plain reader content",
+        })
+    )
+    respx.post("https://llm.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps(
+                _synthesis_response(1)
+            )}}],
+            "usage": {},
         })
     )
 
@@ -389,15 +482,27 @@ async def test_extract_text_format_uses_jina_content(fallback: SearchFallback):
         ["https://example.com"], {"format": "text"}, "keys exhausted"
     )
 
-    assert result["results"][0]["raw_content"] == "Plain reader content"
+    assert result["results"][0]["raw_content"] == "Compact summary 0"
 
 
 @respx.mock
-async def test_extract_shares_total_content_budget_across_results(
+async def test_extract_bounds_synthesis_input_and_summary_output(
     fallback: SearchFallback,
 ):
     respx.post("http://jina.test/process").mock(
         return_value=httpx.Response(200, json={"markdown": "x" * 100})
+    )
+    llm_route = respx.post("https://llm.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={
+            "choices": [{"message": {"content": json.dumps({
+                "answer": "Compact aggregate",
+                "sources": [
+                    {"index": index, "summary": "y" * 1000, "metadata": {}}
+                    for index in range(3)
+                ],
+            })}}],
+            "usage": {},
+        })
     )
 
     result = await fallback.extract(
@@ -406,6 +511,11 @@ async def test_extract_shares_total_content_budget_across_results(
         "keys exhausted",
     )
 
-    assert [len(item["raw_content"]) for item in result["results"]] == [10, 10, 10]
-    assert result["_fallback"]["total_content_limit_chars"] == 30
-    assert result["_fallback"]["effective_per_result_limit_chars"] == 10
+    assert result["answer"] == "Compact aggregate"
+    assert [len(item["raw_content"]) for item in result["results"]] == [600] * 3
+    assert result["_fallback"]["synthesis_input_limit_chars_per_source"] == 10
+    assert result["_fallback"]["summary_limit_chars_per_source"] == 600
+    llm_sources = json.loads(
+        json.loads(llm_route.calls.last.request.content)["messages"][1]["content"]
+    )["sources"]
+    assert [len(source["markdown"]) for source in llm_sources] == [10] * 3
